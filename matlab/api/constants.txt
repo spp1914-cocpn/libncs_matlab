@@ -1,0 +1,5 @@
+% define CPS_ACTUATOR = 0
+% define CPS_CONTROLLER = 1
+% define CPS_SENSOR = 2
+% define numCps = 3
+
