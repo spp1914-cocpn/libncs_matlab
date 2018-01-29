@@ -53,11 +53,11 @@ function config = BuildDoubleIntegratorConfig(mass, samplingInterval, initialPla
     if nargin == 0
         mass = 1; % kg
         samplingInterval = 0.01; % sec, 100 Hz
-        initialPlantMean = [100; 0]; % taken from ACC 2013 paper by Jörg and Maxim
-        initialPlantCov = 0.5 * eye(2); % taken from ACC 2013 paper by Jörg and Maxim
-        initialPlantState = Gaussian(initialPlantMean, initialPlantCov); % taken from ACC 2013 paper by Jörg and Maxim
-        plantNoiseCov = 0.1 * eye(2); % taken from ACC 2013 paper by Jörg and Maxim
-        measNoiseCov = 0.2^2; % taken from ACC 2013 paper by Jörg and Maxim
+        initialPlantMean = [100; 0];
+        initialPlantCov = 0.5 * eye(2);
+        initialPlantState = Gaussian(initialPlantMean, initialPlantCov);
+        plantNoiseCov = 0.1 * eye(2);
+        measNoiseCov = 0.2^2;
     elseif nargin ~= 5
         error('BuildDoubleIntegratorConfig:InvalidNumberOfArgs', ...
             '** Invalid number of arguments (%d). Either pass none or all. **', nargin);
