@@ -55,6 +55,19 @@ function config = BuildInvertedPendulumConfig(massCart, massPendulum, friction, 
     %      A configuration struct, equipped with the parameters as given to
     %      define a double integrator plant.
     
+    
+    % >> This function/class is part of CoCPN-Sim
+    %
+    %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
+    %
+    %    Copyright (C) 2018  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %
+    %                        Institute for Anthropomatics and Robotics
+    %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
+    %                        Karlsruhe Institute of Technology (KIT), Germany
+    %
+    %                        http://isas.uka.de
+    %
     %    This program is free software: you can redistribute it and/or modify
     %    it under the terms of the GNU General Public License as published by
     %    the Free Software Foundation, either version 3 of the License, or

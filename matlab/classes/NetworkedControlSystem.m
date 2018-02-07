@@ -2,6 +2,18 @@ classdef NetworkedControlSystem < handle
     % This class represents a single networked control system, consisting
     % of (linear) plant and sensor, an actuator and a controller.
     
+    % >> This function/class is part of CoCPN-Sim
+    %
+    %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
+    %
+    %    Copyright (C) 2017  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %
+    %                        Institute for Anthropomatics and Robotics
+    %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
+    %                        Karlsruhe Institute of Technology (KIT), Germany
+    %
+    %                        http://isas.uka.de
+    %
     %    This program is free software: you can redistribute it and/or modify
     %    it under the terms of the GNU General Public License as published by
     %    the Free Software Foundation, either version 3 of the License, or
@@ -99,7 +111,7 @@ classdef NetworkedControlSystem < handle
             %
             % Parameters:
             %   >> plantState (Vector or Distribution)
-            %      A vector or a probability distribution of of appropriate dimension, i.e., the size
+            %      A vector or a probability distribution of appropriate dimension, i.e., the size
             %      equals the one expected by the plant.
             %      If a distribution is passed, the initial state is
             %      randomly drawn according to the given probability law.

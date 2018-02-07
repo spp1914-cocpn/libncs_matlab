@@ -34,6 +34,18 @@ function config = BuildDoubleIntegratorConfig(mass, samplingInterval, initialPla
     %      A configuration struct, equipped with the parameters as given to
     %      define a double integrator plant.
     
+    % >> This function/class is part of CoCPN-Sim
+    %
+    %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
+    %
+    %    Copyright (C) 2018  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %
+    %                        Institute for Anthropomatics and Robotics
+    %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
+    %                        Karlsruhe Institute of Technology (KIT), Germany
+    %
+    %                        http://isas.uka.de
+    %    
     %    This program is free software: you can redistribute it and/or modify
     %    it under the terms of the GNU General Public License as published by
     %    the Free Software Foundation, either version 3 of the License, or
@@ -53,11 +65,11 @@ function config = BuildDoubleIntegratorConfig(mass, samplingInterval, initialPla
     if nargin == 0
         mass = 1; % kg
         samplingInterval = 0.01; % sec, 100 Hz
-        initialPlantMean = [100; 0];
+        initialPlantMean = [100; 0]; 
         initialPlantCov = 0.5 * eye(2);
-        initialPlantState = Gaussian(initialPlantMean, initialPlantCov);
-        plantNoiseCov = 0.1 * eye(2);
-        measNoiseCov = 0.2^2;
+        initialPlantState = Gaussian(initialPlantMean, initialPlantCov); 
+        plantNoiseCov = 0.1 * eye(2); 
+        measNoiseCov = 0.2^2; 
     elseif nargin ~= 5
         error('BuildDoubleIntegratorConfig:InvalidNumberOfArgs', ...
             '** Invalid number of arguments (%d). Either pass none or all. **', nargin);
