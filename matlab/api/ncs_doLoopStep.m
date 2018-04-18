@@ -24,6 +24,12 @@ function [pktsOut, stats] = ncs_doLoopStep(handle, timestamp)
     %     describing the delays (in time steps) the processed DataPackets sent from the controller experienced
     %     -ac_delays (Column vector of nonnegative integers, might be empty), 
     %     describing the delays (in time steps) the processed ACKs sent from the actuator experienced
+    %     -sc_sent (Logical, i.e., a flag), indicating whether a
+    %     packet (i.e., a measurement) was sent out by the sensor or not
+    %     -ca_sent (Logical, i.e., a flag), indicating whether a
+    %     packet (i.e., a control sequence) was sent out by the controller or not
+    %     -ac_sent (Logical, i.e., a flag), indicating whether a
+    %     packet (i.e., an ACK) was sent out by the actuator or not
     
     %    This program is free software: you can redistribute it and/or modify
     %    it under the terms of the GNU General Public License as published by
@@ -39,10 +45,9 @@ function [pktsOut, stats] = ncs_doLoopStep(handle, timestamp)
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
     
     ncs = GetNcsByHandle(handle); % crashes if handle is invalid
-    if ~Checks.isPosScalar(timestamp) || mod(timestamp, 1) ~= 0
-        error('ncs_doLoopStep:InvalidTimestamp', ...
-          '** <timestamp> expected to be positive integer **');     
-    end
+    assert(Checks.isPosScalar(timestamp) && mod(timestamp, 1) == 0, ...
+        'ncs_doLoopStep:InvalidTimestamp', ...
+        '** <timestamp> expected to be positive integer **');
     
     caPackets = [];
     scPackets = [];
@@ -63,10 +68,10 @@ function [pktsOut, stats] = ncs_doLoopStep(handle, timestamp)
                     switch packet.sourceAddress
                         case 1
                             % expected to be an ACK packet, so check
-                            if ~packet.isAck
-                                error('ncs_doLoopStep:InvalidACKPacket', ...
-                                    '** Packet from 1 (actuator) to 2 (controller) should be an ACK **');
-                            end
+                            assert(packet.isAck, ...
+                                'ncs_doLoopStep:InvalidACKPacket', ...
+                                '** Packet from 1 (actuator) to 2 (controller) should be an ACK **');
+                            
                             acPackets = [acPackets, packet]; %#ok
                         case 3
                             scPackets = [scPackets, packet]; %#ok
@@ -84,11 +89,19 @@ function [pktsOut, stats] = ncs_doLoopStep(handle, timestamp)
         end
         packetBuffer.clear(handle);
     end
-    [inputSequence, measurements, controllerAck] = ncs.step(timestep, scPackets, caPackets, acPackets);
+
+    [controllerActuatorPacket, sensorControllerPacket, controllerAck] ...
+        = ncs.step(timestep, scPackets, caPackets, acPackets);
+
+    pktsOut = constructPacketsToSend(controllerActuatorPacket, sensorControllerPacket, controllerAck);
     
-    pktsOut = constructPacketsToSend(inputSequence, measurements, controllerAck, timestep);
     stats.actual_qoc = ncs.getQualityOfControl(timestep);
-    % column vector or empty matrix
+    % determine if sensor and/or controller do not send this time
+    % determine if actuator sent out an ACK
+    stats.sc_sent = ~isempty(sensorControllerPacket);
+    stats.ca_sent = ~isempty(controllerActuatorPacket);
+    stats.ac_sent = ~isempty(controllerAck);
+    % record the delays of the processed packets: column vector or empty matrix
     stats.sc_delays = arrayfun(@(p) p.packetDelay, scPackets)';
     stats.ca_delays = arrayfun(@(p) p.packetDelay, caPackets)';
     stats.ac_delays = arrayfun(@(p) p.packetDelay, acPackets)';
@@ -100,20 +113,20 @@ function timestep = convertToTimeStep(ncs, timestamp)
 end
 
 %% constructPacketsToSend
-function packetsOut = constructPacketsToSend(inputSequence, measurements, controllerAck, currentTimeStep)
+function packetsOut = constructPacketsToSend(controllerActuatorPacket, sensorControllerPacket, controllerAck)
     packets = controllerAck;
-    if ~isempty(inputSequence)
-        packets = [packets; CreateDataPacket(inputSequence, currentTimeStep, 2, 1)];
+    if ~isempty(controllerActuatorPacket)
+        packets = [packets; controllerActuatorPacket];
     end
-    if ~isempty(measurements)
-        packets = [packets; CreateDataPacket(measurements, currentTimeStep, 3, 2)];
+    if ~isempty(sensorControllerPacket)
+        packets = [packets; sensorControllerPacket];
     end
     packetsOut = arrayfun(@(p) p, packets, 'UniformOutput', false);
 end
 
 %% issueErrorInvalidDestinationAddress
 function issueErrorInvalidDestinationAddress(destinationAddress, sourceAddress)
-    if naragin == 1
+    if nargin == 1
         error('ncs_doLoopStep:InvalidDestinationAddress', ...
             '** Unsupported destination address encountered (%d)  **', destinationAddress);
     end

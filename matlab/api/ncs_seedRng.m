@@ -5,11 +5,6 @@ function ncs_seedRng(seed)
     % Parameters:
     %   >> seed (Nonnegative integer)
     %      The seed to use. Matlab by default uses seed 0.
-    %
-    %
-    % Returns:
-    %   << packet (DataPacket)
-    %      The created DataPacket instance.  
     
     %    This program is free software: you can redistribute it and/or modify
     %    it under the terms of the GNU General Public License as published by
@@ -24,10 +19,10 @@ function ncs_seedRng(seed)
     %    You should have received a copy of the GNU General Public License
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
     
-    if ~Checks.isNonNegativeScalar(seed) || mod(seed, 1) ~= 0
-        error('ncs_seedRng:InvalidSeed', ...
-          '** <seed> expected to be a nonnegative integer **'); 
-    end
+    assert(Checks.isNonNegativeScalar(seed) && mod(seed, 1) == 0, ...
+        'ncs_seedRng:InvalidSeed', ...
+        '** <seed> expected to be a nonnegative integer **'); 
+    
     rng(seed);
 end
 

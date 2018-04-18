@@ -33,6 +33,14 @@ classdef NcsSensorTest < matlab.unittest.TestCase
         V;
         measModel;
         ncsSensorUnderTest;
+        isEventBased;
+    end
+    
+    methods (Access = private)
+        %% setMeasDelta
+        function setMeasDelta(this, measDelta)
+            this.ncsSensorUnderTest.measurementDelta = measDelta;
+        end
     end
     
     methods (TestMethodSetup)
@@ -42,10 +50,11 @@ classdef NcsSensorTest < matlab.unittest.TestCase
             this.dimPlant = 3;
             this.C = [1 2 3];
             this.V = 0.1^2; % variance of the meas noise
+            this.isEventBased = true;
      
             this.measModel = LinearMeasurementModel(this.C);
             this.measModel.setNoise(Gaussian(0, this.V));
-            this.ncsSensorUnderTest = NcsSensor(this.measModel);
+            this.ncsSensorUnderTest = NcsSensor(this.measModel, this.isEventBased);
         end
     end
     
@@ -54,17 +63,51 @@ classdef NcsSensorTest < matlab.unittest.TestCase
         function testNcsSensor(this)
             ncsSensor = NcsSensor(this.measModel);
             % this call should not crash
+            this.verifyFalse(ncsSensor.isEventBased);
+        end
+        
+        %% testSetMeasurementDelta
+        function testSetMeasurementDelta(this)
+            expectedErrId = 'NcsSensor:SetMeasurementDelta:InvalidDelta';
+            
+            invalidMeasDelta = this; % not a scalar
+            this.verifyError(@() this.setMeasDelta(invalidMeasDelta), expectedErrId);
+            
+            invalidMeasDelta = -eps; % not nonnegative
+            this.verifyError(@() this.setMeasDelta(invalidMeasDelta), expectedErrId);
+            
+            % now a succesfult try
+            newMeasDelta = 1000;
+            this.setMeasDelta(newMeasDelta)
+            this.verifyEqual(this.ncsSensorUnderTest.measurementDelta, newMeasDelta);
         end
         
         %% testStep
         function testStep(this)
             import matlab.unittest.constraints.IsScalar;
             plantState = [2 3 4]';
+            timestep = 1;
+            this.assertTrue(this.ncsSensorUnderTest.isEventBased);
             
-            measurement = this.ncsSensorUnderTest.step(plantState);
+            rng(1); % seed
+            measurementPacket = this.ncsSensorUnderTest.step(timestep, plantState);
+            
+            this.verifyNotEmpty(measurementPacket);
+            this.verifyClass(measurementPacket, ?DataPacket);
+            measurement = measurementPacket.payload;
             % we can only verify that the measurement is a scalar
-            this.verifyNotEmpty(measurement);
             this.verifyThat(measurement, IsScalar);
+            % check timestep, source (id=3) and destination (id=2) of
+            % packet
+            this.verifyEqual(measurementPacket.timeStamp, timestep)
+            this.verifyEqual(measurementPacket.sourceAddress, 3)
+            this.verifyEqual(measurementPacket.destinationAddress, 2)
+            
+            % take a measurement for the same plant state again
+            % and use the same seed to obtain the same measurement
+            rng(1);
+            measurementPacket2 = this.ncsSensorUnderTest.step(timestep, plantState);
+            this.verifyEmpty(measurementPacket2);
         end
     end
 end

@@ -35,11 +35,6 @@ function config = CreateDoubleIntegratorScenario()
     %    You should have received a copy of the GNU General Public License
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-    
-%         caDelayProbs = [1.000000e-01, 2.000000e-01, 2.000000e-01, 1.500000e-01, ...
-%             1.000000e-01, 5.000000e-02, 2.000000e-02, 2.000000e-02, ...
-%             2.000000e-02, 1.400000e-01]; 
-        
     %0 time steps delay not possibly
     %1 85%
     %2-11 time steps uniform 7%
@@ -47,12 +42,14 @@ function config = CreateDoubleIntegratorScenario()
     caDelayProbs = [1e-6 0.85  repmat(0.07/(12-2), 1, 12-2), 0.08];
     caDelayProbs = caDelayProbs ./ sum(caDelayProbs);
 
-    controlSequenceLength = 12;%5; 
-    scDelayProbs = caDelayProbs;
-    maxMeasDelay = max(0, numel(scDelayProbs) - 2);% last entry indicates loss
+    controlSequenceLength = numel(caDelayProbs);
+    %scDelayProbs = caDelayProbs;
+    %maxMeasDelay = max(0, numel(scDelayProbs) - 2);% last entry indicates loss
+    scDelayProbs = [];
+    maxMeasDelay = max(0, numel(caDelayProbs) - 1); % last entry indicates loss
     
-    filterClassName = 'DelayedModeIMMF';
-    controllerClassName = 'FiniteHorizonController';
+    filterClass = ?DelayedModeIMMF;
+    controllerClass = ?NominalPredictiveController;
     Q = eye(2); 
     R = 1; 
     maxControlSequenceDelay = Inf;
@@ -61,6 +58,10 @@ function config = CreateDoubleIntegratorScenario()
     config = BuildNetworkConfig(maxMeasDelay, controlSequenceLength, ...
         maxControlSequenceDelay, caDelayProbs, scDelayProbs, config);
     
-    config = BuildFilterControllerConfig(filterClassName, config.initialPlantState, Q, R, controllerClassName, config);
+    config.networkType = NetworkType.UdpLikeWithAcks;
+    
+    initialPlantCov = 0.5 * eye(2); % taken from ACC 2013 paper by Jörg and Maxim
+    initialEstimate = Gaussian(config.initialPlantState, initialPlantCov);
+    config = BuildControllerConfig(controllerClass.Name, Q, R, initialEstimate, filterClass.Name, config);
 end
 

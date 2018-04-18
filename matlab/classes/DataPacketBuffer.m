@@ -9,7 +9,7 @@ classdef DataPacketBuffer < handle
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2017  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2017-2018  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -56,11 +56,9 @@ classdef DataPacketBuffer < handle
             %   >> handle (Key into ComponentMap)
             %      A handle (key into ComponentMap) which uniquely identifies a NetworkedControlSystem instance.
             %
-            
-            if ~Checks.isPosScalar(ncsHandle) || mod(ncsHandle, 1) ~= 0
-                 error('DataPacketBuffer:Clear:InvalidKey',  ...
-                    '** Map key <key> (handle) must be a positive integer **');
-            end
+            assert(Checks.isPosScalar(ncsHandle) && mod(ncsHandle, 1) == 0, ...
+                'DataPacketBuffer:Clear:InvalidKey',  ...
+                '** Map key <key> (handle) must be a positive integer **');
             this.buffer(ncsHandle) = [];
         end
         
@@ -103,14 +101,13 @@ classdef DataPacketBuffer < handle
             %      The DataPacket sent to the NCS with the specified
             %      handle.
             %
-            if ~Checks.isClass(packet, 'DataPacket')
-                 error('DataPacketBuffer:AddPacket:InvalidDataPacket',  ...
-                    '** Expected type of <packet> is DataPacket, but true type is %s **', class(packet));
-            end
-            if ~Checks.isPosScalar(ncsHandle) || mod(ncsHandle, 1) ~= 0
-                 error('DataPacketBuffer:AddPacket:InvalidKey',  ...
-                    '** Map key <key> (handle) must be a positive integer **');
-            end
+            assert(Checks.isClass(packet, 'DataPacket'), ...
+                'DataPacketBuffer:AddPacket:InvalidDataPacket',  ...
+                '** Expected type of <packet> is DataPacket, but true type is %s **', class(packet));
+            assert(Checks.isPosScalar(ncsHandle) && mod(ncsHandle, 1) == 0, ...
+                'DataPacketBuffer:AddPacket:InvalidKey',  ...
+                '** Map key <key> (handle) must be a positive integer **');
+            
             if ~isKey(this.buffer, ncsHandle)
                 this.buffer(ncsHandle) = packet;
             else

@@ -272,14 +272,10 @@ classdef NetworkedControlSystemTest < matlab.unittest.TestCase
             stats = this.ncsUnderTest.getStatistics();
             this.verifyNotEmpty(stats);
             recordedIntialState = stats.trueStates(:, 1);
-%             recordedInitialEstimate = stats.estimates(:, 1);
-%             recordedInitialCov = stats.covariances(:, :, 1);
             recordedInitialMode = stats.trueModes(1);
             
             this.verifyEqual(recordedIntialState, this.plantState);
             this.verifyEqual(recordedInitialMode, this.controlSeqLength + 1);
-%             this.verifyEqual(recordedInitialEstimate, this.plantState);
-%             this.verifyEqual(recordedInitialCov, 0.5 * eye(this.dimX));
          
         end
         
@@ -312,8 +308,7 @@ classdef NetworkedControlSystemTest < matlab.unittest.TestCase
             this.verifyTrue(isfield(actualStatistics, 'numUsedMeasurements'));
             this.verifyTrue(isfield(actualStatistics, 'numDiscardedMeasurements'));
             this.verifyTrue(isfield(actualStatistics, 'numDiscardedControlSequences'));
-            %this.verifyTrue(isfield(actualStatistics, 'estimates'));
-            %this.verifyTrue(isfield(actualStatistics, 'covariances'));
+            this.verifyTrue(isfield(actualStatistics, 'controllerStates'));
         end
         
         %% testGetQualityOfControlNoPlant
@@ -360,6 +355,8 @@ classdef NetworkedControlSystemTest < matlab.unittest.TestCase
         
         %% testStepNoPackets
         function testStepNoPackets(this)
+             import matlab.unittest.constraints.IsScalar;
+            
            % set and initalize plant
             this.ncsUnderTest.plant = this.plantSubsystem;
             this.ncsUnderTest.controller = this.controllerSubsystem;
@@ -368,15 +365,24 @@ classdef NetworkedControlSystemTest < matlab.unittest.TestCase
             this.assertNotEmpty(this.ncsUnderTest.controller);
             
             this.ncsUnderTest.initPlant(this.zeroPlantState);
+            this.ncsUnderTest.initStatisticsRecording(this.maxLoopSteps);
             this.filter.setState(this.zeroPlantStateDistribution);
             
             this.ncsUnderTest.sensor = this.sensorSubsystem;
             
             timestep = 1;
-            [inputSequence, measurement, controllerAck] = this.ncsUnderTest.step(timestep, [], [], []);
+            [caPacket, scPacket, controllerAck] = this.ncsUnderTest.step(timestep, [], [], []);
+            
+            this.verifyClass(caPacket, ?DataPacket);
+            this.verifyClass(scPacket, ?DataPacket);
+            
+            inputSequence = caPacket.payload;
+            measurement = scPacket.payload;
             
             this.verifyEmpty(controllerAck); % as there are no packets received
             this.verifySize(inputSequence, [this.dimU, this.controlSeqLength]);
+            % we can only verify that the measurement is a scalar
+            this.verifyThat(measurement, IsScalar);
             this.verifySize(measurement, [this.dimY, 1]);
             % linear controller, hence first element of sequence should be
             % zero
@@ -385,8 +391,21 @@ classdef NetworkedControlSystemTest < matlab.unittest.TestCase
             % the sequence
             this.verifyEqual(inputSequence, zeros(this.dimU, this.controlSeqLength));
             
+            % check timestep, source (id=3) and destination (id=2) of
+            % scPacket packet
+            this.verifyEqual(scPacket.timeStamp, timestep)
+            this.verifyEqual(scPacket.sourceAddress, 3)
+            this.verifyEqual(scPacket.destinationAddress, 2)
+            
+            % check timestep, source (id=2) and destination (id=1) of
+            % caPacket packet
+            this.verifyEqual(caPacket.timeStamp, timestep)
+            this.verifyEqual(caPacket.sourceAddress, 2)
+            this.verifyEqual(caPacket.destinationAddress, 1)
+            
             stats = this.ncsUnderTest.getStatistics();
             recordedState = stats.trueStates(:, timestep + 1);
+            recordedControllerState = stats.controllerStates(:, timestep + 1);
             recordedMode = stats.trueModes(timestep + 1);
             recordedInput = stats.appliedInputs(:, timestep);
             recordedNumUsedMeasurements = stats.numUsedMeasurements(timestep);
@@ -394,6 +413,7 @@ classdef NetworkedControlSystemTest < matlab.unittest.TestCase
             
             this.verifyEqual(recordedInput, this.actuator.defaultInput);
             this.verifyEqual(recordedState, this.zeroPlantState);
+            this.verifyEqual(recordedControllerState, this.zeroPlantState);
             this.verifyEqual(recordedMode, this.controlSeqLength + 1);
             this.verifyEqual(recordedNumUsedMeasurements, 0);
             this.verifyEqual(recordedNumDiscardedMeasurements, 0);

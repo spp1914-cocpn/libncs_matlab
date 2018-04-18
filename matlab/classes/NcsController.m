@@ -7,7 +7,7 @@ classdef NcsController < handle
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2017  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2017-2018  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -28,13 +28,21 @@ classdef NcsController < handle
     %    You should have received a copy of the GNU General Public License
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
     
-    properties (SetAccess=immutable, GetAccess = protected)
+    properties (SetAccess=immutable, GetAccess = public)
         controller@SequenceBasedController;
+        % origin shift: useful, in case controller uses a linearized model
+        % of the plant dynamics
+        plantStateOrigin; % the origin of the plant coordinate system in controller coordinates
     end
     
-     properties (Dependent, GetAccess = public)
+    properties (SetAccess = immutable, GetAccess = public)
+        % indicate whether controller works event-based
+        isEventBased@logical = false;
+    end
+    
+    properties (Dependent, GetAccess = public)
         controlSequenceLength;
-     end
+    end
     
     methods
         function sequenceLength = get.controlSequenceLength(this)
@@ -44,7 +52,7 @@ classdef NcsController < handle
    
     methods (Access = public)
         %% NcsController
-        function this = NcsController(controller)
+        function this = NcsController(controller, plantStateOrigin)
             % Class constructor.
             %
             % Parameters:
@@ -52,13 +60,30 @@ classdef NcsController < handle
             %      The controller to be utilized within the corresponding
             %      NCS.
             %
+            %   >> plantStateOrigin (Vector, optional)
+            %      The origin in plant state variables expressed in terms of
+            %      the state variables used by the controller, e.g., the
+            %      linearization point if the controller uses a linear
+            %      approximation of the plant dynamics.
+            %      This vector is required to compute the quality of control
+            %      and the total control costs which are compute with
+            %      respect to the controller's state variables.
+            %      If left out, no offset is assumed, i.e., the zero vector.
+            %
             % Returns:
             %   << this (NcsController)
             %      A new NcsController instance.
             this.controller = controller;
+            
+            if Checks.isClass(this.controller, 'EventTriggeredInfiniteHorizonController')
+                this.isEventBased = true;
+            end
+            if nargin == 2 && Checks.isVec(plantStateOrigin)
+                this.plantStateOrigin = plantStateOrigin(:);
+            end
         end
         
-        function [inputSequence, numUsedMeas, numDiscardedMeas] ...
+        function [dataPacket, numUsedMeas, numDiscardedMeas, controllerState] ...
                 = step(this, timestep, scPackets, acPackets, plantMode)
             % Compute a control sequence as part of a control cycle in an
             % NCS.
@@ -80,8 +105,10 @@ classdef NcsController < handle
             %      matrix, if not directly known to the controller.
             %
             % Returns:
-            %   << inputSequence (Matrix of size dimInput x controlSequenceLength, might be empty)
-            %      The new control sequence computed by the controller, with the individual inputs column-wise arranged.
+            %   << dataPacket (DataPacket or empty matrix)
+            %      The data packet containing new control sequence computed
+            %      by the controller, with the individual inputs column-wise arranged,
+            %      to be transmitted to the actuator.
             %      Empty matrix is returned in case none is to be transmitted (e.g., when the controller is event-based).
             %
             %   << numUsedMeas (Nonnegative integer)
@@ -92,15 +119,56 @@ classdef NcsController < handle
             %      The number of measurements which were discarded due to
             %      a too large delay.
             %
+            %   << controllerState (Column vector, optional)
+            %      The controller state (i.e., the controller's estimate of
+            %      the plant state), expressed in terms of the plant state
+            %      variables.
+            
             [measurements, measDelays] = NcsController.processScPackets(scPackets);
+            
+            if nargout == 4
+                % retrieve state before sequence is computed
+                controllerState = this.controller.getControllerPlantState(this);
+                % shift controller state if required, to be expressed with
+                % regards to the plant coordinates
+                if ~isempty(this.plantStateOrigin)
+                    controllerState = controllerState + this.plantStateOrigin;
+                end
+            end
+            
             inputSequence = ...
                 this.reshapeInputSequence(this.controller.computeControlSequence(measurements, measDelays));
+            
+            dataPacket = NcsController.createControlSequenceDataPacket(timestep, inputSequence);
             [numUsedMeas, numDiscardedMeas] = this.controller.getLastComputationMeasurementData();
         end
         
         %% computeCosts
         function controlCosts = computeCosts(this, plantStates, appliedInputs)
-            controlCosts = this.controller.computeCosts(plantStates, appliedInputs);
+            % Compute accrued costs for the given state and input
+            % trajectory according to this controller's underlying cost functional.
+            %
+            % Parameters:
+            %   >> stateTrajectory (Matrix of dimension dimPlantState-by-n)
+            %      A matrix representing a state (with respect to the plant model) trajectory, i.e., adjacent
+            %      columns contain succesive plant states.
+            %
+            %   >> appliedInputs (Matrix of dimension dimPlantInput-by-m)
+            %      A matrix representing an input trajectory, i.e., adjacent
+            %      columns contain succesive control inputs.
+            %
+            % Returns:
+            %   << costs (Nonnegative scalar)
+            %      The accrued costs according to this controller's underlying cost functional.
+            
+            % we compute the accrued costs with repsect to the state
+            % variables of the controller
+            if isempty(this.plantStateOrigin)
+                states = plantStates;
+            else
+                states = plantStates - this.plantStateOrigin;
+            end
+            controlCosts = this.controller.computeCosts(states, appliedInputs);
         end
         
         %% getCurrentQualityOfControl
@@ -109,8 +177,8 @@ classdef NcsController < handle
             % true state.
             %
             % Parameters:
-            %   >> trueState (Vector)
-            %      The plant true state at the given time step.
+            %   >> plantState (Vector)
+            %      The plant true state (with respect to the plant model) at the given time step.
             %
             %   >> timestep (Positive integer)
             %      The current time step, i.e., the integer yielding the
@@ -123,12 +191,20 @@ classdef NcsController < handle
             %      plant true state, or, in a tracking task, the norm of
             %      the deviation from the current reference output.
             
+            % we compute the qoc with respect to the state
+            % variables of the controller
+            if isempty(this.plantStateOrigin)
+                state = plantState;
+            else
+                state = plantState(:) - this.plantStateOrigin;
+            end
+            
             if Checks.isClass(this.controller, 'SequenceBasedTrackingController')
                 % we track a reference
-                qoc = norm(this.controller.getDeviationFromRefForState(plantState, timestep)); 
+                qoc = norm(this.controller.getDeviationFromRefForState(state, timestep)); 
             else
                 % we track the origin
-                qoc = norm(plantState);
+                qoc = norm(state);
             end
         end
     end
@@ -142,16 +218,27 @@ classdef NcsController < handle
             else
                 sequence = [];
             end
-        end
+        end       
+       
     end
     
     methods (Static, Access = protected)
+         
+        %% createControlSequenceDataPacket
+         function dataPacket = createControlSequenceDataPacket(timestep, inputSequence)
+            % the control sequence is transmitted from the controller (id = 2) to the actuator (id = 1)
+            dataPacket = CreateDataPacket(inputSequence, timestep, 2, 1);
+         end
+        
+        %% processScPackets
         function [measurements, measDelays] = processScPackets(scPackets)
             measurements = [];
             measDelays = [];
             if numel(scPackets) ~= 0
-                [delays{1:numel(scPackets)}] = scPackets(:).packetDelay;
-                [meas{1:numel(scPackets)}] = scPackets(:).payload;
+                delays = cell(1, numel(scPackets));
+                meas = cell(1, numel(scPackets));
+                [delays{:}] = scPackets(:).packetDelay;
+                [meas{:}] = scPackets(:).payload;
                 measurements = cell2mat(meas);
                 measDelays = cell2mat(delays);
             end

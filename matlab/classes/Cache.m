@@ -10,7 +10,7 @@ classdef Cache < handle
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2017  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2017-2018  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -96,19 +96,19 @@ classdef Cache < handle
         
         %% insert
         function lookup = insert(ncsComponent, name)
-            if ~isa(ncsComponent, 'handle')
-                error('Cache:Insert:ComponentNotAHandle', ...
-                    '** Cannot insert component for it is not a handle **');
-            end
+            assert(isa(ncsComponent, 'handle'), ...
+                'Cache:Insert:ComponentNotAHandle', ...
+                '** Cannot insert component for it is not a handle **');
+            
             lookup = Cache.getInstance().insertInternal(ncsComponent, [name '.mat']);
         end
         
         %% lookup
         function ncsComponent = lookup(lookupInfo)
-            if ~isstruct(lookupInfo)
-                error('Cache:Lookup:InvalidStruct', ...
-                     '** <lookupInfo> must be a structure array. **');
-            end
+            assert(isstruct(lookupInfo), ...
+                'Cache:Lookup:InvalidStruct', ...
+                 '** <lookupInfo> must be a structure array. **');
+            
             expectedFields = {'name', 'date', 'size'};
             found = isfield(lookupInfo, expectedFields);
             notFoundIdx = find(~found);
@@ -127,10 +127,10 @@ classdef Cache < handle
         
         %% setLocation
         function setLocation(cacheLocation)
-            if ~isrow(cacheLocation) || ~ischar(cacheLocation)
-                error('Cache:SetLocation:InvalidChar', ...
-                    '** <cacheLocation> must be a char array (row vector-like). **');
-            end
+            assert(isrow(cacheLocation) && ischar(cacheLocation), ...
+                'Cache:SetLocation:InvalidChar', ...
+                '** <cacheLocation> must be a char array (row vector-like). **');
+            
             Cache.getInstance().setLocationInternal(cacheLocation);
         end
     end

@@ -23,10 +23,10 @@ function srcAddr = ncs_pktGetSrcAddr(packet)
     %    You should have received a copy of the GNU General Public License
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
     
-    if ~Checks.isClass(packet, 'DataPacket')
-        error('ncs_pktGetSrcAddr:InvalidPacket', ...
-              '** <packet> expected to be a single DataPacket **'); 
-    end
+    assert(Checks.isClass(packet, 'DataPacket'), ...
+        'ncs_pktGetSrcAddr:InvalidPacket', ...
+        '** <packet> expected to be a single DataPacket **'); 
+
     % addresses start at 1 in Matlab!
     srcAddr = packet.sourceAddress - 1;
 end

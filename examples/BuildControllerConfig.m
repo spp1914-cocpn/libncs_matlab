@@ -1,15 +1,10 @@
-function configOut = BuildFilterControllerConfig(filterClassName, initialEstimate, Q, R, controllerClassName, config)
+function configOut = BuildControllerConfig(controllerClassName, Q, R, initialEstimate, filterClassName, config)
     % Function to create a config struct with parameters to define an
-    % NcsControllerWithFilter, i.e, a controller with quadratic cost function which uses an external
-    % filter.
+    % NcsController, i.e, a controller with quadratic cost function.
     %
     % Parameters:
-    %   >> filterClassName (Character Array)
-    %      A character containg the name of the filter class (i.e., a subclass of DelayedMeasurementsFilter) to be utilized. 
-    % 
-    %   >> initialEstimate (Distribution)
-    %      A Distribution (e.g., a Gaussian or GaussianMixture) specifying
-    %      the intial estimate of the filter.
+    %   >> controllerClassName (Character Array)
+    %      A character containg the name of the controller class (i.e., a subclass of SequenceBasedController) to be utilized. 
     %
     %   >> Q (Positive semi-definite matrix)
     %      The state weighting matrix in the controller's underlying cost function.
@@ -17,8 +12,17 @@ function configOut = BuildFilterControllerConfig(filterClassName, initialEstimat
     %   >> R (Positive definite matrix)
     %      The input weighting matrix in the controller's underlying cost function.
     %
-    %   >> controllerClassName (Character Array)
-    %      A character containg the name of the controller class (i.e., a subclass of SequenceBasedController) to be utilized. 
+    %   >> initialEstimate (Distribution, optional)
+    %      A Distribution (e.g., a Gaussian or GaussianMixture) specifying
+    %      the intial state of the controller or the filter associated with
+    %      it.
+    %      Leave out or pass the empty matrix, if not required.
+    %      Should, however, be present, if filter is utilized.
+    %
+    %   >> filterClassName (Character Array, optional)
+    %      A character containg the name of the filter class (i.e., a subclass of DelayedMeasurementsFilter) to be utilized. 
+    %      Leave out or pass the empty matrix, in case none shall be
+    %      utilized.
     %
     %   >> config (Struct, optional)
     %      A structure containing configuration parameters which shall be extended. 
@@ -57,11 +61,21 @@ function configOut = BuildFilterControllerConfig(filterClassName, initialEstimat
 
     if nargin == 6
         configOut = config;
+    elseif nargin == 3
+        filterClassName = [];
+        initialEstimate = [];
+    elseif nargin == 4
+        initialEstimate = [];
     end
-    configOut.filterClassName = filterClassName;
+    
     configOut.controllerClassName = controllerClassName;
     configOut.Q = Q;
     configOut.R = R;
-    configOut.initialEstimate = initialEstimate;
+    if ~isempty(filterClassName)
+        configOut.filterClassName = filterClassName;
+    end
+    if ~isempty(initialEstimate)
+        configOut.initialEstimate = initialEstimate;
+    end
 end
 

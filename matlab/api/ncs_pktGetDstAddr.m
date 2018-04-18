@@ -24,10 +24,10 @@ function dstAddr = ncs_pktGetDstAddr(packet)
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
     
 	% return destination address stored in $packet
-    if ~Checks.isClass(packet, 'DataPacket')
-        error('ncs_pktGetDstAddr:InvalidPacket', ...
-              '** <packet> expected to be a single DataPacket **'); 
-    end
+    assert(Checks.isClass(packet, 'DataPacket'), ...
+        'ncs_pktGetDstAddr:InvalidPacket', ...
+        '** <packet> expected to be a single DataPacket **'); 
+
     % addresses start at 1 in Matlab!
     dstAddr = packet.destinationAddress - 1;
 end

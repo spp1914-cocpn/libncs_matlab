@@ -19,7 +19,7 @@ function configOut = BuildNetworkConfig(maxMeasDelay, controlSequenceLength, max
     %      of the delays in the CA-link (network between controller and
     %      actuator/plant).
     %
-    %   >> scDelayProbs (Nonnegative Vector)
+    %   >> scDelayProbs (Nonnegative Vector, optional)
     %      A vector with nonnegative entries summing up to 1 denoting the probability distribution
     %      of the delays in the SC-link (network between sensor and
     %      controller).
@@ -61,11 +61,17 @@ function configOut = BuildNetworkConfig(maxMeasDelay, controlSequenceLength, max
 
     if nargin == 6
         configOut = config;
+    elseif nargin == 4
+        scDelayProbs = [];
     end
+    
     configOut.maxMeasDelay = maxMeasDelay;
     configOut.controlSequenceLength = controlSequenceLength;
     configOut.maxControlSequenceDelay = maxControlSequenceDelay;
     configOut.caDelayProbs = caDelayProbs;
-    configOut.scDelayProbs = scDelayProbs;
+
+    if ~isempty(scDelayProbs)
+        configOut.scDelayProbs = scDelayProbs;
+    end
 end
 

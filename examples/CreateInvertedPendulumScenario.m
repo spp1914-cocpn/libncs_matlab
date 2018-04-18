@@ -1,8 +1,8 @@
 function config = CreateInvertedPendulumScenario()
     % Function to create a config struct with parameters to define a
-    % scenario where an inverted pendulum on a cart whose dynamics has been linearized around the 
-    % upward equlibrium shall be controlled.
-    % Both measurements and control sequence are transmitted over networks. 
+    % scenario where an inverted pendulum on a cart be controlled by a
+    % controller that uses a linearized plant dynamics for simplicity.
+    % Both measurements and control sequences are transmitted over networks. 
     % For simplicity, both networks have the same characteristics, i.e.,
     % they are described by the same delay probability distributions.
     %
@@ -36,23 +36,40 @@ function config = CreateInvertedPendulumScenario()
     %    You should have received a copy of the GNU General Public License
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-    % configuration mainly based on Fusion 13 paper by Jörg Fischer
-    caDelayProbs = [0.001 0.019 0.08 0.14 0.17 0.17 0.14 0.08 0.019 0.001 0.18]; % starting from zero delay
-    maxControlSequenceDelay = max(0, numel(caDelayProbs) - 2); % last entry indicates loss
+    %0 time steps delay not possibly
+    %1 85%
+    %2-11 time steps uniform 7%
+    %Inf 8%
+    caDelayProbs = [1e-12 0.85  repmat(0.07/(12-2), 1, 12-2), 0.08]; % starting from zero delay
+    caDelayProbs = caDelayProbs ./ sum(caDelayProbs);
+    maxControlSequenceDelay = max(0, numel(caDelayProbs) - 1); % last entry indicates loss
     controlSequenceLength = numel(caDelayProbs);
-    scDelayProbs = [0.001 0.019 0.08 0.14 0.17 0.17 0.14 0.08 0.019 0.001 0.18];
-    maxMeasDelay = max(0, numel(scDelayProbs) - 2);% last entry indicates loss
+    scDelayProbs = [];
+    maxMeasDelay = maxControlSequenceDelay;
     
-    filterClassName = 'DelayedKF';
-    controllerClassName = 'NominalPredictiveController';
+    filterClass = ?DelayedModeIMMF;
+    controllerClass = ?NominalPredictiveController;
     Q = diag([5000 0 100 0]); % state weighting matrix for LQR
     R = 100; % input weighting matrix for LQR
+    % this combination allows for larger inputs
     
     config = BuildInvertedPendulumConfig();
     config = BuildNetworkConfig(maxMeasDelay, controlSequenceLength, ...
         maxControlSequenceDelay, caDelayProbs, scDelayProbs, config);
-    % we use a TCP-like network here
-    config.networkType = NetworkType.TcpLike;
-    config = BuildFilterControllerConfig(filterClassName, config.initialPlantState, Q, R, controllerClassName, config);
+    
+    config.networkType = NetworkType.UdpLikeWithAcks;
+    % initial filter state
+    % substract the equilibrium/linearization point
+    plantStateCov = 0.01^2 * eye(4);
+    initialEstimate = Gaussian(config.initialPlantState - config.linearizationPoint, plantStateCov);
+    config = BuildControllerConfig(controllerClass.Name, Q, R, initialEstimate, filterClass.Name, config);
+    
+%     config.stateConstraints = [pi/36;pi/36]; % radians, max deviation from equilibrium (5 degrees)
+%     config.stateConstraintWeightings = [0 0;    
+%                                         0 0;
+%                                         1 -1;
+%                                         0 0];
+%     config.inputConstraints = 0;
+%     config.inputConstraintWeightings = 0; % dummy constraints on the input
 end
 

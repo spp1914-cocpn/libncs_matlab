@@ -6,7 +6,7 @@ classdef NcsControllerWithFilter < NcsController
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2017  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2017-2018  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -40,7 +40,7 @@ classdef NcsControllerWithFilter < NcsController
     
     methods (Access = public)
         %% NcsControllerWithFilter
-        function this = NcsControllerWithFilter(controller, filter, plantModel, measModel, defaultInput)
+        function this = NcsControllerWithFilter(controller, filter, plantModel, measModel, defaultInput, plantStateOrigin)
             % Class constructor.
             %
             % Parameters:
@@ -63,14 +63,27 @@ classdef NcsControllerWithFilter < NcsController
             %      filter.
             %
             %   >> defaultInput (Vector)
-            %      The default input to be emplyoed by the actuator if its
+            %      The default input to be employed by the actuator if its
             %      buffer runs empty.
+            %
+            %   >> plantStateOrigin (Vector, optional)
+            %      The origin in plant state variables expressed in terms of
+            %      the state variables used by the controller, e.g., the
+            %      linearization point if the controller uses a linear
+            %      approximation of the plant dynamics.
+            %      This vector is required to compute the quality of control
+            %      and the total control costs which are compute with
+            %      respect to the controller's state variables.
+            %      If left out, no offset is assumed, i.e., the zero vector.
             %
             % Returns:
             %   << this (NcsControllerWithFilter)
             %      A new NcsControllerWithFilter instance.
             %
-            this = this@NcsController(controller);
+            if nargin == 5
+                plantStateOrigin = [];
+            end
+            this = this@NcsController(controller, plantStateOrigin);
                     
             this.filter = filter;
             this.plantModel = plantModel;
@@ -82,14 +95,59 @@ classdef NcsControllerWithFilter < NcsController
         end
         
         %% step
-        function [inputSequence, numUsedMeas, numDiscardedMeas] ...
+        function [dataPacket, numUsedMeas, numDiscardedMeas, controllerState] ...
                 = step(this, timestep, scPackets, acPackets, plantMode)
+            % Compute a control sequence as part of a control cycle in an
+            % NCS.
+            %
+            % Parameters:
+            %   >> timestep (Positive integer)
+            %      The current time step, i.e., the integer yielding the
+            %      current simulation time (in s) when multiplied by the
+            %      loop's sampling interval.
+            %     
+            %   >> scPackets (Array of DataPackets, might be empty)
+            %      An array of DataPackets containing measurements taken and transmitted from the sensor.
+            %
+            %   >> acPackets (Array of DataPackets, might be empty)
+            %      An array of DataPackets containing ACKs returned from the actuator.
+            %   
+            %   >> plantMode (Nonnegative integer, might be empty)
+            %      The previous true plant mode (theta_{k-1}), or the empty
+            %      matrix, if not directly known to the controller.
+            %
+            % Returns:
+            %   << dataPacket (DataPacket or empty matrix)
+            %      The data packet containing new control sequence computed
+            %      by the controller, with the individual inputs column-wise arranged,
+            %      to be transmitted to the actuator.
+            %      Empty matrix is returned in case none is to be transmitted (e.g., when the controller is event-based).
+            %
+            %   << numUsedMeas (Nonnegative integer)
+            %      The number of measurements actually used for the
+            %      computation of the control sequence.
+            %
+            %   << numDiscardedMeas (Nonnegative integer)
+            %      The number of measurements which were discarded due to
+            %      a too large delay.
+            %
+            %   << controllerState (Column vector, optional)
+            %      The controller state (i.e., the controller's estimate of
+            %      the plant state), expressed in terms of the plant state
+            %      variables.
+            
             % we make use of a dedicated filter to obtain the state
             % estimate
-
+           
             % first, update the estimate, i.e., obtain x_k
-            [numUsedMeas, numDiscardedMeas, previousMode] = this.updateEstimate(scPackets, acPackets, timestep);
-            
+            % we need a special treatment for the DelayedModeIMMF
+            if Checks.isClass(this.filter, 'DelayedModeIMMF')
+                [numUsedMeas, numDiscardedMeas, previousMode] ...
+                    = this.updateEstimateDelayedModeIMMF(scPackets, acPackets, timestep, plantMode);
+            else
+                [numUsedMeas, numDiscardedMeas, previousMode] = this.updateEstimate(scPackets, timestep);
+            end
+
             this.bufferedControlInputSequences = circshift(this.bufferedControlInputSequences, 1, 3);
             % if previous true mode is unknown, some sort of certainty equivalence: use mode estimate
             % instead of true mode
@@ -104,32 +162,34 @@ classdef NcsControllerWithFilter < NcsController
             % use (previous!) true mode (theta_{k-1}) or estimated mode of augmented system
             % and use xhat_k
             inputSequence = this.computeControlInputSequence(previousMode, timestep);
+            dataPacket = NcsController.createControlSequenceDataPacket(timestep, inputSequence);
+            
             % finally, update the buffer for the filter
             if ~isempty(inputSequence)
                 this.bufferedControlInputSequences(:,:, 1) = inputSequence;
             else
                 this.bufferedControlInputSequences(:,:, 1) ...
                     = repmat(this.defaultInput, 1, this.controlSequenceLength);
-                 %fprintf('Do not send control input at time k = %d\n', timestep);
+            end
+            
+            if nargout == 4
+                [controllerState, ~] = this.filter.getStateMeanAndCov();
+                % shift controller state if required, to be expressed with
+                % regards to the plant coordinates
+                if ~isempty(this.plantStateOrigin)
+                    controllerState = controllerState + this.plantStateOrigin;
+                end
             end
         end
     end
     
     methods (Access = private)
         %% updateEstimate
-        function [numUsedMeas, numDiscardedMeas, previousModeEstimate] = updateEstimate(this, scPackets, acPackets, timestep)
-            % so far, only the DelayedIMMF is supported
-            % distribute the possible inputs to all modes
-            modeSpecificInputs = arrayfun(@(mode) this.bufferedControlInputSequences(:, mode, mode), ...
-                1:this.controlSequenceLength, 'UniformOutput', false);
-            % include the default input for the last mode 
-            this.plantModel.setSystemInput([cell2mat(modeSpecificInputs) this.defaultInput]);
+        function [numUsedMeas, numDiscardedMeas, previousModeEstimate] = updateEstimate(this, scPackets, timestep)
             
-            % we need a special treatment for the DelayedModeIMMF
-            if Checks.isClass(this.filter, 'DelayedModeIMMF')
-                [numUsedMeas, numDiscardedMeas, previousModeEstimate] ...
-                    = this.performUpdateEstimateDelayedModeIMMF(scPackets, acPackets, timestep);
-            else
+            if timestep > 1
+                this.distributePossibleSystemInputs();
+                
                 [measurements, measDelays] = NcsController.processScPackets(scPackets);
                 if ~isempty(measurements)
                     this.filter.step(this.plantModel, this.measModel, measurements, measDelays);
@@ -143,29 +203,57 @@ classdef NcsControllerWithFilter < NcsController
                 % all other filters do currently not provide an appropriate
                 % estimate
                 previousModeEstimate = [];
+            else
+                % initial timestep, no update required
+                previousModeEstimate = [];
+                numUsedMeas = 0;
+                numDiscardedMeas = 0;
             end
         end
         
-        %% performUpdateEstimateDelayedModeIMMF
-        function [numUsedMeas, numDiscardedMeas, previousModeEstimate] = performUpdateEstimateDelayedModeIMMF(this, scPackets, acPackets, timestep)
+        %% updateEstimateDelayedModeIMMF
+        function [numUsedMeas, numDiscardedMeas, previousModeEstimate] = updateEstimateDelayedModeIMMF(this, scPackets, acPackets, timestep, previousTruePlantMode)
             % we need a special treatment
-            [modeObservations, modeDelays] = NcsControllerWithFilter.processAcPackets(timestep, acPackets);
-            
-            [measurements, measDelays] = NcsController.processScPackets(scPackets);
-            this.filter.step(this.plantModel, this.measModel, ...
-                measurements, measDelays, modeObservations, modeDelays);
+            if timestep > 1
+                [modeObservations, modeDelays] = NcsControllerWithFilter.processAcPackets(timestep, acPackets);
+                if ~isempty(previousTruePlantMode)
+                    modeObservations(end+1) = previousTruePlantMode;
+                    modeDelays(end+1)= 1;
+                end
+                [measurements, measDelays] = NcsController.processScPackets(scPackets);
+                
+                this.distributePossibleSystemInputs();
+                
+                this.filter.step(this.plantModel, this.measModel, ...
+                    measurements, measDelays, modeObservations, modeDelays);
 
-            [numUsedMeas, numDiscardedMeas] = this.filter.getLastUpdateMeasurementData();
-            previousModeEstimate = this.filter.getPreviousModeEstimate();
+                [numUsedMeas, numDiscardedMeas] = this.filter.getLastUpdateMeasurementData();
+                previousModeEstimate = this.filter.getPreviousModeEstimate();
+            else
+                % initial timestep, no update required
+                numUsedMeas = 0;
+                numDiscardedMeas = 0;
+                previousModeEstimate = this.filter.getPreviousModeEstimate(false);
+            end
+            
         end
        
+        %% distributePossibleSystemInputs
+        function distributePossibleSystemInputs(this)
+            % distribute the possible inputs to all modes
+            modeSpecificInputs = arrayfun(@(mode) this.bufferedControlInputSequences(:, mode, mode), ...
+                    1:this.controlSequenceLength, 'UniformOutput', false);
+            % include the default input for the last mode 
+            this.plantModel.setSystemInput([cell2mat(modeSpecificInputs) this.defaultInput]);
+        end
+        
         %% computeControlInputSequence
         function inputSequence = computeControlInputSequence(this, varargin)
             % Compute a sequence of control inputs to apply based on the most recent estimate of the associated filter.
             %
             % Parameters:
             %   >> varargin (Optional arguments)
-            %      Any optional arguments for the controller, such as current time step (e.g. if the controller's horizon is not infinite) or 
+            %      Any optional arguments for the controller, such as current time step (e.g., if the controller's horizon is not infinite) or 
             %      the previous (estimated) mode of the controllor-actuator-plant subsystem.
             %
             % Returns:

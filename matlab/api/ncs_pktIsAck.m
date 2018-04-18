@@ -1,5 +1,5 @@
 function ack = ncs_pktIsAck(packet)
-    % Returns true if the packet is an acknowledgement. 
+    % Returns true if the packet is an acknowledgment. 
     %
     % Parameters:
     %   >> packet (DataPacket)
@@ -22,10 +22,10 @@ function ack = ncs_pktIsAck(packet)
     %    You should have received a copy of the GNU General Public License
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
     
-    if ~Checks.isClass(packet, 'DataPacket')
-        error('ncs_pktIsAck:InvalidPacket', ...
-              '** <packet> expected to be a single DataPacket **'); 
-    end
+    assert(Checks.isClass(packet, 'DataPacket'), ...
+        'ncs_pktIsAck:InvalidPacket', ...
+        '** <packet> expected to be a single DataPacket **'); 
+
     ack = packet.isAck;
 end
 

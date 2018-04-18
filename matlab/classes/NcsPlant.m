@@ -27,8 +27,8 @@ classdef NcsPlant < handle
     %    You should have received a copy of the GNU General Public License
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
     
-    properties(SetAccess = immutable, GetAccess = protected)
-         plant@LinearPlant;
+    properties (SetAccess = immutable, GetAccess = protected)
+         plant@SystemModel; % LinearPlant or NonlinearPlant usually
          actuator@BufferingActuator;
     end
     
@@ -66,12 +66,12 @@ classdef NcsPlant < handle
             this.plant = plant;
             this.actuator = actuator;
         end
-        
+              
         %% step
         function [controllerAck, numDiscardedSeq, actualInput, plantMode, newPlantState] ...
                 = step(this, timestep, caPackets, plantState)
             % Process received packets (i.e., control sequences) from the controller and apply an appropriate input u_k
-            % as part of a control cycle in an NCS.
+            % as part of a control cycle in an NCS, i.e., proceed from time k to time k+1.
             %
             % Parameters:
             %   >> timestep (Positive integer)

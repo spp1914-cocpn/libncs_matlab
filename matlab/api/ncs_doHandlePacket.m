@@ -31,14 +31,13 @@ function pktsOut = ncs_doHandlePacket(handle, timestamp, pktIn)
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
     
     GetNcsByHandle(handle); % crashes if handle is invalid
-    if ~Checks.isPosScalar(timestamp) || mod(timestamp, 1) ~= 0
-        error('ncs_doHandlePacket:InvalidTimestamp', ...
-          '** <timestamp> expected to be positive integer **');     
-    end
-    if ~Checks.isClass(pktIn, 'DataPacket')
-        error('ncs_doHandlePacket:InvalidPacket', ...
-              '** <pktIn> expected to be a single DataPacket **'); 
-    end
+    assert(Checks.isPosScalar(timestamp) && mod(timestamp, 1) == 0, ...
+        'ncs_doHandlePacket:InvalidTimestamp', ...
+        '** <timestamp> expected to be positive integer **');
+    assert(Checks.isClass(pktIn, 'DataPacket'), ...
+        'ncs_doHandlePacket:InvalidPacket', ...
+        '** <pktIn> expected to be a single DataPacket **');    
+
     DataPacketBuffer.getInstance().addPacket(handle, pktIn);
     % so far, do not return any ACKs or other packets
     pktsOut = cell.empty();

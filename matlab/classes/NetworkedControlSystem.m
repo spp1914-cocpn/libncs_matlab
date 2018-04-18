@@ -6,7 +6,7 @@ classdef NetworkedControlSystem < handle
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2017  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2017-2018  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -44,7 +44,7 @@ classdef NetworkedControlSystem < handle
         plantMode;
         
         % statistics to record in each step (struct)
-        statistics;
+        statistics;        
     end
     
     properties (Dependent, GetAccess = public)
@@ -93,10 +93,9 @@ classdef NetworkedControlSystem < handle
                     samplingInterval = NetworkedControlSystem.defaultSamplingTime;
                     networkType = NetworkType.UdpLikeWithAcks;
                 case 2
-                    if ~Checks.isPosScalar(samplingInterval)
-                        error('NetworkedControlSystem:InvalidSamplingInterval', ...
-                            '** <samplingInterval> must be a positive scalar. **');
-                    end
+                    assert(Checks.isPosScalar(samplingInterval), ...
+                        'NetworkedControlSystem:InvalidSamplingInterval', ...
+                        '** <samplingInterval> must be a positive scalar. **');
                     networkType = NetworkType.UdpLikeWithAcks;
             end
             this.name = name;
@@ -123,12 +122,10 @@ classdef NetworkedControlSystem < handle
             else
                 state = plantState;
             end
-            if ~isnumeric(state) || ~isvector(state) || length(state) ~= this.plant.dimState || ~all(isfinite(state))
-                error('NetworkedControlSystem:InitPlant', ...
-                    '** Cannot init plant: State must be a real-valued %d-dimensional vector or distribution **', ...
-                    this.plant.dimState);
-            end
-             % store as column vector
+            assert(isnumeric(state) && isvector(state) && length(state) == this.plant.dimState && all(isfinite(state)), ...
+                'NetworkedControlSystem:InitPlant', ...
+                '** Cannot init plant: State must be a real-valued %d-dimensional vector or distribution **', this.plant.dimState);
+            % store as column vector
             this.plantState = state(:);
             % also, set the initial true mode (maxMode)
             this.plantMode = this.controlSequenceLength + 1;%1; 
@@ -139,7 +136,7 @@ classdef NetworkedControlSystem < handle
             % Initialize the recording of data to be gathered at each
             % time step, which are: true state, true mode, applied input,
             % number of used measurements, number of discarded
-            % measurements, number of discarded control sequences.
+            % measurements, number of discarded control sequences, controller state.
             % 
             % In particular, memory is allocated for the given number of
             % time steps and the initial data (at k=0) are recorded.
@@ -150,10 +147,10 @@ classdef NetworkedControlSystem < handle
             %
             this.checkPlant();
             
-            if ~Checks.isPosScalar(maxLoopSteps) || mod(maxLoopSteps, 1) ~= 0
-                error('NetworkedControlSystem:InitStatisticsRecording', ...
-                    '** Cannot init recording of statistics: <maxLoopSteps> must be a positive integer **');
-            end
+            assert(Checks.isPosScalar(maxLoopSteps) && mod(maxLoopSteps, 1) == 0, ...
+                'NetworkedControlSystem:InitStatisticsRecording', ...
+                '** Cannot init recording of statistics: <maxLoopSteps> must be a positive integer **');
+
             this.statistics.trueStates = nan(this.plant.dimState, maxLoopSteps + 1);
             this.statistics.trueModes = nan(1, maxLoopSteps + 1);
             this.statistics.appliedInputs = nan(this.plant.dimInput, maxLoopSteps);
@@ -161,8 +158,7 @@ classdef NetworkedControlSystem < handle
             this.statistics.numDiscardedMeasurements = nan(1, maxLoopSteps);
             this.statistics.numDiscardedControlSequences = nan(1, maxLoopSteps);
             %
-            %this.statistics.estimates = nan(this.plant.dimState, maxLoopSteps + 1);
-            %this.statistics.covariances = nan(this.plant.dimState, this.plant.dimState, maxLoopSteps + 1);
+            this.statistics.controllerStates = zeros(this.plant.dimState, maxLoopSteps + 1);
             
             % set the initial values (at timestep k=0)
             this.statistics.trueStates(:, 1) = this.plantState;
@@ -194,24 +190,36 @@ classdef NetworkedControlSystem < handle
             % Returns:
             %   << currentQoC (Nonnegative scalar)
             %      The current QoC, which is simply the norm of the current
-            %      plant true state, or, in a tracking task, the norm of
+            %      plant true state (with respect to the controller plant model), or, in a tracking task, the norm of
             %      the deviation from the current reference output.
                        
             % currently, simply express QoC in terms of norm of state
             % hence, a small value is desired
             this.checkPlant();
-            currentQoC = this.controller.getCurrentQualityOfControl(this.plantState, timestep);
+            if isempty(this.plantState)
+                currentQoC = 0;
+            else
+                currentQoC = this.controller.getCurrentQualityOfControl(this.plantState, timestep);
+            end
         end
         
         %% computeTotalControlCosts
         function costs = computeTotalControlCosts(this)
+            % Compute accrued costs of the control task
+            % according to the cost functional of the employed controller.
+            %
+            % Returns:
+            %   << costs (Nonnegative scalar)
+            %      The accrued costs according to the cost functional of the employed controller.
+            
             this.checkController();
             
             costs = this.controller.computeCosts(this.statistics.trueStates, this.statistics.appliedInputs);
         end
         
         %% step
-        function [inputSequence, measurement, controllerAck] = step(this, timestep, scPackets, caPackets, acPackets)
+        function [controllerActuatorPacket, sensorControllerPacket, controllerAck] ...
+                = step(this, timestep, scPackets, caPackets, acPackets)
             % Execute a single time-triggered control cycle as described on
             % pages 36-37 in: 
             %   Jörg Fischer,
@@ -235,13 +243,15 @@ classdef NetworkedControlSystem < handle
             %      An array of DataPackets containing ACKs returned from the actuator.
             %
             % Returns:
-            %   << inputSequence (Matrix of size dimInput x controlSequenceLength, might be empty)
-            %      The new control sequence computed by the controller, with the individual inputs column-wise arranged.
+            %   << controllerActuatorPacket (DataPacket or empty matrix)
+            %      The data packet containing new control sequence computed
+            %      by the controller, with the individual inputs column-wise arranged,
+            %      to be transmitted to the actuator.
             %      Empty matrix is returned in case none is to be transmitted (e.g., when the controller is event-based).
             %
-            %   << measurement (Column vector, might be empty)
-            %      The new measurement taken by the sensor.
-            %      Empty matrix is returned in case none is to be transmitted (e.g., when the sensor is event-based).
+            %   << sensorControllerPacket (DataPacket or empty matrix)
+            %      The data packet containing the measurement to be transmitted to the controller.
+            %      Empty matrix is returned in case none is taken or to be transmitted (e.g., when the sensor is event-based).
             %
             %   << controllerAck (Empty matrix or DataPacket)
             %      The ACK for the DataPacket within the given caPackets that has
@@ -251,10 +261,10 @@ classdef NetworkedControlSystem < handle
             this.checkPlant();
             this.checkController();
             this.checkSensor();
- 
+
             % take a measurement y_k
-            measurement = this.sensor.step(this.plantState);
-                        
+            sensorControllerPacket = this.sensor.step(timestep, this.plantState);
+                                   
             % do not pass the previous plant mode to the controller unless
             % network is TCP-like
             previousMode = [];
@@ -262,12 +272,11 @@ classdef NetworkedControlSystem < handle
                 previousMode = this.plantMode;
             end
             
-            [inputSequence, numUsedMeas, numDiscardedMeas] ...
+            [controllerActuatorPacket, numUsedMeas, numDiscardedMeas, controllerState] ...
                 = this.controller.step(timestep, scPackets, acPackets, previousMode);
        
             % update the recorded data accordingly
-%             [this.statistics.estimates(:, timestep + 1), ...
-%                 this.statistics.covariances(:, :, timestep + 1)] = this.filter.getPointEstimate();
+            this.statistics.controllerStates(:, timestep + 1) = controllerState;
             this.statistics.numUsedMeasurements(timestep) = numUsedMeas;
             this.statistics.numDiscardedMeasurements(timestep) = numDiscardedMeas;
             
@@ -286,7 +295,7 @@ classdef NetworkedControlSystem < handle
             this.statistics.appliedInputs(:, timestep) = actualInput; % this input was applied at time k (u_k)
             this.statistics.trueModes(timestep + 1) = this.plantMode; % the mode theta_k
             this.statistics.trueStates(:, timestep + 1) = this.plantState; % store x_k
-            
+                                    
             this.plantState = newPlantState;
         end
        
@@ -296,26 +305,23 @@ classdef NetworkedControlSystem < handle
                 
         %% checkController
         function checkController(this)
-            if isempty(this.controller)
-                error('NetworkedControlSystem:CheckController', ...
-                    '** Controller has not been specified **');
-            end
+            assert(~isempty(this.controller), ...
+                'NetworkedControlSystem:CheckController', ...
+                '** Controller has not been specified **');
         end
                      
         %% checkPlant
         function checkPlant(this)
-            if isempty(this.plant)
-                error('NetworkedControlSystem:CheckPlant', ...
-                    '** Plant has not been specified **');
-            end
+            assert(~isempty(this.plant), ...
+                'NetworkedControlSystem:CheckPlant', ...
+                '** Plant has not been specified **');
         end
         
         %% checkSensor
         function checkSensor(this)
-            if isempty(this.sensor)
-                error('NetworkedControlSystem:CheckSensor', ...
-                    '** Sensor has not been specified **');
-            end
+            assert(~isempty(this.sensor), ...
+                'NetworkedControlSystem:CheckSensor', ...
+                '** Sensor has not been specified **');
         end
     end
 end

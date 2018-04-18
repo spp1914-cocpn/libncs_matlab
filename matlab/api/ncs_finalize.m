@@ -20,6 +20,8 @@ function [costs, stats] = ncs_finalize(ncsHandle)
     %     containing the actually applied control inputs per time step
     %     -trueStates (Matrix), 
     %     containing the true plant states per time step
+    %     -controllerStates (Matrix), 
+    %     containing the plant states kept by the controller per time step
     %     -numDiscardedControlSequences (Row vector of nonnegative integers), indicating the number
     %     of received control sequences that have been discarded by the actuator at each time step
     
@@ -43,6 +45,7 @@ function [costs, stats] = ncs_finalize(ncsHandle)
     stats.numUsedMeasurements = ncsStats.numUsedMeasurements;
     stats.numDiscardedMeasurements = ncsStats.numDiscardedMeasurements;
     stats.trueStates = ncsStats.trueStates;
+    stats.controllerStates = ncsStats.controllerStates;
     stats.appliedInputs = ncsStats.appliedInputs;
     stats.numDiscardedControlSequences = ncsStats.numDiscardedControlSequences;
     

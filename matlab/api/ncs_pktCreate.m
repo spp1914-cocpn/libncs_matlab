@@ -32,10 +32,10 @@ function packet = ncs_pktCreate(srcAddr, dstAddr, payload)
     %    You should have received a copy of the GNU General Public License
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
     
-    if ~Checks.isClass(payload, 'uint8', numel(payload))
-        error('ncs_pktCreate:InvalidPayload', ...
-          '** <payload> expected to be a byte stream, i.e. a uint8 vector **'); 
-    end
+    assert(Checks.isClass(payload, 'uint8', numel(payload)), ...
+        'ncs_pktCreate:InvalidPayload', ...
+        '** <payload> expected to be a byte stream, i.e. a uint8 vector **'); 
+    
     % we expect the deserialized payload to be a 4x1 or 1x4 cell array
     % timestamp, isAck, id, payload
     data = getArrayFromByteStream(payload);

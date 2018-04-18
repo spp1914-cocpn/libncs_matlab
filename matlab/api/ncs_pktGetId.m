@@ -24,10 +24,10 @@ function id = ncs_pktGetId(packet)
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
     
 	% identifier stored in $packet
-    if ~Checks.isClass(packet, 'DataPacket')
-        error('ncs_pktGetId:InvalidPacket', ...
-              '** <packet> expected to be a single DataPacket **'); 
-    end
+    assert(Checks.isClass(packet, 'DataPacket'), ...
+        'ncs_pktGetId:InvalidPacket', ...
+        '** <packet> expected to be a single DataPacket **'); 
+
     id = packet.id;
 end
 
