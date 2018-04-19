@@ -212,6 +212,9 @@ classdef NcsDoLoopStepTest < matlab.unittest.TestCase
         
         %% test
         function test(this)
+            % ensure that there are two packets buffered for the NCS
+            this.assertNumElements(this.packetBuffer.getDataPackets(this.ncsHandle), 2);
+            
             import matlab.unittest.constraints.IsScalar
             
             timestep = (this.timestamp + 1) * 1e12; % in pico-seconds
@@ -259,6 +262,10 @@ classdef NcsDoLoopStepTest < matlab.unittest.TestCase
             this.verifySize(pktsOut, [2 1]);
             this.verifyClass(pktsOut{1}, ?DataPacket);
             this.verifyClass(pktsOut{2}, ?DataPacket);
+            
+            % verify the side effect
+            % packet buffer should no longer contain packets for the NCS
+            this.verifyEmpty(this.packetBuffer.getDataPackets(this.ncsHandle));
         end
     end
 end

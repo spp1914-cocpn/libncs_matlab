@@ -1,4 +1,4 @@
-function results = executeTests()
+function results = executeTestsLibNcsMatlab()
     % Function to run all test cases in libncs_matlab/tests/matlab.
     
     % >> This function/class is part of CoCPN-Sim
