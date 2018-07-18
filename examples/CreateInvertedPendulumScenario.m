@@ -49,7 +49,7 @@ function config = CreateInvertedPendulumScenario()
     
     filterClass = ?DelayedModeIMMF;
     controllerClass = ?NominalPredictiveController;
-    Q = diag([5000 0 100 0]); % state weighting matrix for LQR
+    Q = diag([100 0 5000 0]); % state weighting matrix for LQR, small angle deviations are crucial
     R = 100; % input weighting matrix for LQR
     % this combination allows for larger inputs
     
