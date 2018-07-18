@@ -171,6 +171,38 @@ classdef NcsController < handle
             controlCosts = this.controller.computeCosts(states, appliedInputs);
         end
         
+        %% getCurrentStageCosts
+        function stageCosts = getCurrentStageCosts(this, plantState, appliedInput, timestep)
+            % Get the current stage costs for the given plant
+            % true state.
+            %
+            % Parameters:
+            %   >> plantState (Vector)
+            %      The plant true state (with respect to the plant model) at the given time step.
+            %
+            %   >> appliedInput (Vector)
+            %      The input applied to the plant at the given timestep.
+            %
+            %   >> timestep (Positive integer)
+            %      The current time step, i.e., the integer yielding the
+            %      current simulation time (in s) when multiplied by the
+            %      loop's sampling interval.
+            %
+            % Returns:
+            %   << stageCosts (Nonnegative scalar)
+            %      The current stage costs according to the controller's underlying cost functional.
+                        
+            % we compute the stage costs with respect to the state
+            % variables of the controller
+            if isempty(this.plantStateOrigin)
+                state = plantState(:);
+            else
+                state = plantState(:) - this.plantStateOrigin;
+            end
+            
+            stageCosts = this.controller.computeStageCosts(state, appliedInput, timestep);
+        end
+        
         %% getCurrentQualityOfControl
         function qoc = getCurrentQualityOfControl(this, plantState, timestep)
             % Get the current quality of control (QoC) for the given plant

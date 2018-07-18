@@ -54,8 +54,12 @@ function handle = ncs_initialize(maxSimTime, id, configStruct, filename)
     %   - sensor: linear dynamics to be used for simulation of the sensor(LinearMeasurementModel)
     %   - sensorEventBased: flag to indicate whether the sensor shall
     %     transmit measurements in an event-based manner (default false)
-    %   - sensorMeasDelta: the threshold value (delta) for the
+    %   - sensorMeasDelta: the threshold value (delta) for the decision rule
     %     if the sensor employs a send-on-delta strategy (nonnegative scalar)
+    %   - controllerEventBased: flag to indicate whether the controller shall
+    %     transmit sequences in an event-based manner (by using deadband control) (default false)
+    %   - controllerDeadband: the threshold value (deadband) for decison rule the
+    %     if the controller employs a deadband control strategy (nonnegative scalar)
     %   - linearizationPoint: if the controller uses a linear approximation
     %     of the nonlinear plant dynamics, the linearization point should
     %     be provided (vector)
@@ -76,10 +80,10 @@ function handle = ncs_initialize(maxSimTime, id, configStruct, filename)
         '** <maxSimTime> must be positive and given in pico-seconds. **');
     
     [pathStr, configFileName, extension] = fileparts(filename);
-    if exist(filename, 'file') ~= 2 || ~strcmp(extension, '.mat') % 2 is returned in case of existing file
-        error('ncs_initialize:InvalidFile', ...
-            '** %s does not exist or is not a mat-file **', filename);
-    end
+    % 2 is returned in case of existing file
+    assert(exist(filename, 'file') == 2 && strcmp(extension, '.mat'), ...
+        'ncs_initialize:InvalidFile', ...
+        '** %s does not exist or is not a mat-file **', filename);
         
     if isempty(configStruct)
         config = load(filename);
@@ -124,10 +128,10 @@ function handle = ncs_initialize(maxSimTime, id, configStruct, filename)
     ncs.plant = NcsPlant(plant, actuator);
         
     sensor = initSensor(config);
-    if isfield(config, 'sensorEventBased')
-        ncs.sensor = NcsSensor(sensor, config.sensorEventBased);
+    if isfield(config, 'sensorEventBased') && config.sensorEventBased
+        ncs.sensor = EventBasedNcsSensor(sensor);
         if isfield(config, 'sensorMeasDelta')
-            sensor.measurementDelta = config.sensorMeasDelta;
+            ncs.sensor.measurementDelta = config.sensorMeasDelta;
         end
     else
         ncs.sensor = NcsSensor(sensor);
@@ -146,7 +150,19 @@ function handle = ncs_initialize(maxSimTime, id, configStruct, filename)
         else
             filterSpecificSensorModel = sensor;
         end
-        if isfield(config, 'linearizationPoint')
+        if isfield(config, 'controllerEventBased') && config.controllerEventBased
+            if isfield(config, 'linearizationPoint')
+                ncs.controller = EventBasedNcsControllerWithFilter(controller, filter, ...
+                filterSpecificPlantModel, filterSpecificSensorModel, actuator.defaultInput, config.linearizationPoint);
+            else
+                ncs.controller = EventBasedNcsControllerWithFilter(controller, filter, ...
+                filterSpecificPlantModel, filterSpecificSensorModel, actuator.defaultInput);
+            end
+            % set the deadband, if provided (else default value is used)
+            if isfield(config, 'controllerDeadband')
+                ncs.controller.deadband = config.controllerDeadband;
+            end
+        elseif isfield(config, 'linearizationPoint')
             ncs.controller = NcsControllerWithFilter(controller, filter, ...
                 filterSpecificPlantModel, filterSpecificSensorModel, actuator.defaultInput, config.linearizationPoint);
         else
@@ -174,7 +190,7 @@ function controller = doControllerCacheLookup(config, configFileName, pathStr, l
     if ~isempty(cacheInfo)
         cachedController = Cache.lookup(cacheInfo);
         if ~isempty(cachedController) && strcmp(class(cachedController), config.controllerClassName)
-            % check for additional, type dependent proprties that must
+            % check for additional, type dependent properties that must
             % match
             switch config.controllerClassName
                 case 'FiniteHorizonController'
@@ -190,9 +206,8 @@ function controller = doControllerCacheLookup(config, configFileName, pathStr, l
                         controller = cachedController;
                     end
                 case 'NominalPredictiveController'
-                    if cachedController.sequenceLength ~= config.controlSequenceLength
-                        cachedController.changeSequenceLength(config.controlSequenceLength);
-                    end
+                    % ensure that we use the correct sequence length
+                    cachedController.changeSequenceLength(config.controlSequenceLength);                    
                     if ~isequal(cachedController.Q, config.Q) || ~isequal(cachedController.R, config.R)
                         cachedController.changeCostMatrices(config.Q, config.R);
                     end
@@ -230,6 +245,11 @@ function controller = doControllerCacheLookup(config, configFileName, pathStr, l
                     if cachedController.sequenceLength == config.controlSequenceLength ...
                             && cachedController.maxMeasurementDelay == config.maxMeasDelay
                         controller = cachedController;
+                    end
+                case 'EventTriggeredInfiniteHorizonController'
+                    if cachedController.sequenceLength == config.controlSequenceLength
+                        controller = cachedController;
+                        controller.transmissionCosts = config.transmissionCosts;                        
                     end
                 otherwise
                     controller = cachedController;
@@ -292,11 +312,11 @@ function controller = initController(config, horizonLength)
             end
         case 'FiniteHorizonController'
             if isfield(config, 'stateConstraintWeightings')
-                if sum(isfield(config, {'inputConstraintWeightings', 'constraintBounds'})) ~= 2
-                    error('ncs_initialize:InitController:FiniteHorizonController', ...
-                        ['** Variables <inputConstraintWeightings> and <constraintBounds> ' ...
-                        'must be present in the configuration to init the constrained FiniteHorizonController **']);
-                end
+                assert(sum(isfield(config, {'inputConstraintWeightings', 'constraintBounds'})) == 2, ...
+                    'ncs_initialize:InitController:FiniteHorizonController', ...
+                    ['** Variables <inputConstraintWeightings> and <constraintBounds> ' ...
+                    'must be present in the configuration to init the constrained FiniteHorizonController **']);
+                
                 controller = FiniteHorizonController(config.A, config.B, config.Q, config.R, ...
                     config.caDelayProbs, config.controlSequenceLength, horizonLength, ...
                     config.stateConstraintWeightings, config.inputConstraintWeightings, config.constraintBounds);
@@ -306,13 +326,13 @@ function controller = initController(config, horizonLength)
                     config.caDelayProbs, config.controlSequenceLength, horizonLength);
             end
         case 'LinearlyConstrainedPredictiveController'
-            if sum(isfield(config, {'stateConstraintWeightings', 'inputConstraintWeightings', ...
-                    'stateConstraints', 'inputConstraints'})) ~= 4
-                 error('ncs_initialize:InitController:LinearlyConstrainedPredictiveController', ...
-                        ['** Variables <stateConstraintWeightings>, <inputConstraintWeightings>, ' ...
-                        '<stateConstraints> and <inputConstraints> '...
-                        'must be present in the configuration to init LinearlyConstrainedPredictiveController **']);
-            end
+            assert(sum(isfield(config, {'stateConstraintWeightings', 'inputConstraintWeightings', ...
+                    'stateConstraints', 'inputConstraints'})) == 4, ...
+                'ncs_initialize:InitController:LinearlyConstrainedPredictiveController', ...
+                ['** Variables <stateConstraintWeightings>, <inputConstraintWeightings>, ' ...
+                '<stateConstraints> and <inputConstraints> '...
+                'must be present in the configuration to init LinearlyConstrainedPredictiveController **']);
+ 
             if sum(isfield(config, {'Z', 'refTrajectory'})) == 2
                 % we track a trajectory
                 controller = LinearlyConstrainedPredictiveController(config.A, config.B, config.Q, config.R, ...
@@ -327,30 +347,30 @@ function controller = initController(config, horizonLength)
         case 'FiniteHorizonTrackingController'
             % check if the required additional fields are present in the
             % config: Z (matrix) and refTrajectory (matrix)
-            if sum(isfield(config, {'Z', 'refTrajectory'})) ~= 2
-                error('ncs_initialize:InitController:FiniteHorizonTrackingController', ...
-                    '** Variables <Z> and <refTrajectory> must be present in the configuration to init %s **', ...
+            assert(sum(isfield(config, {'Z', 'refTrajectory'})) == 2, ...
+                'ncs_initialize:InitController:FiniteHorizonTrackingController', ...
+                '** Variables <Z> and <refTrajectory> must be present in the configuration to init %s **', ...
                     'FiniteHorizonTrackingController');
-            end
+            
             controller = FiniteHorizonTrackingController(config.A, config.B, config.Q, config.R, config.Z, ...
                 config.caDelayProbs, config.controlSequenceLength, horizonLength, config.refTrajectory);
         case 'EventTriggeredInfiniteHorizonController'
-            if ~isfield(config, 'transmissionCosts')
-                error('ncs_initialize:InitController:EventTriggeredInfiniteHorizonController', ...
-                    '** Variable <transmissionCosts> must be present in the configuration to init %s **', ...
+            assert(isfield(config, 'transmissionCosts'), ...
+                'ncs_initialize:InitController:EventTriggeredInfiniteHorizonController', ...
+                '** Variable <transmissionCosts> must be present in the configuration to init %s **', ...
                     'EventTriggeredInfiniteHorizonController');
-            end
+            
             controller = EventTriggeredInfiniteHorizonController(config.A, config.B, config.Q, config.R, ...
                 config.caDelayProbs, config.controlSequenceLength, config.transmissionCosts);
         case 'NominalPredictiveController'
             controller = NominalPredictiveController(config.A, config.B, config.Q, config.R, ...
                 config.controlSequenceLength);
         case 'InfiniteHorizonUdpLikeController'
-            if ~isfield(config, 'scDelayProbs')
-                error('ncs_initialize:InitController:InfiniteHorizonUdpLikeController', ...
-                    '** Variable <scDelayProbs> must be present in the configuration to init %s **', ...
+            assert(isfield(config, 'scDelayProbs'), ...
+                'ncs_initialize:InitController:InfiniteHorizonUdpLikeController', ...
+                '** Variable <scDelayProbs> must be present in the configuration to init %s **', ...
                     'InfiniteHorizonUdpLikeController');
-            end
+            
             if isfield(config, 'G')
                 % transform the plant noise covariance
                 actualW = G * config.W * G';
@@ -374,11 +394,10 @@ end
 
 %% initFilter
 function [filter, filterPlantModel, filterSensorModel] = initFilter(config)
-    if ~isfield(config, 'initialEstimate')
-        error('ncs_initialize:InitFilter:InitialEstimateMissing', ...
-            '** Variable <initialEstimate> must be present in the configuration to init a filter/estimator **');
-    end
-
+    assert(isfield(config, 'initialEstimate'), ...
+        'ncs_initialize:InitFilter:InitialEstimateMissing', ...
+        '** Variable <initialEstimate> must be present in the configuration to init a filter/estimator **');
+    
     caDelayProbs = config.caDelayProbs;
     Validator.validateDiscreteProbabilityDistribution(caDelayProbs);
     
@@ -466,14 +485,11 @@ end
 function writeCacheInfo(configFileName, configFilePath, cacheInfo)
     cacheInfoFile = [configFilePath filesep configFileName '.cacheinfo'];
     [fileId, errMsg] = fopen(cacheInfoFile, 'w', 'n', 'UTF-8');
-    if fileId > 0
-        % save date as full precision double, name as string, and size as
-        % integer
-        fprintf(fileId, 'name %s\ndate %.15f\nsize %d', cacheInfo.name, cacheInfo.date, cacheInfo.size);
-        fclose(fileId);
-    else
-        error('ncs_initialize:WriteCacheInfo:Fopen', errMsg);
-    end
+    assert(fileId > 0, 'ncs_initialize:WriteCacheInfo:Fopen', errMsg);
+    
+    % save date as full precision double, name as string, and size as integer
+    fprintf(fileId, 'name %s\ndate %.15f\nsize %d', cacheInfo.name, cacheInfo.date, cacheInfo.size);
+    fclose(fileId);
 end
 
 %% readCacheInfo
@@ -483,15 +499,14 @@ function cacheInfo = readCacheInfo(configFileName, configFilePath)
     cacheInfoFile = [configFilePath filesep configFileName '.cacheinfo'];
     if exist(cacheInfoFile, 'file') == 2
         [fileId, errMsg] = fopen(cacheInfoFile, 'r', 'n', 'UTF-8');
-        if fileId > 0
-            % create the structure from the file
-            cacheInfo.name = sscanf(fgetl(fileId), 'name %s');
-            cacheInfo.date = sscanf(fgetl(fileId), 'date %f');
-            cacheInfo.size = sscanf(fgetl(fileId), 'size %d');
-            fclose(fileId);
-        else
-            error('ncs_initialize:ReadCacheInfo:Fopen', errMsg);
-        end
+        
+        assert(fileId > 0, 'ncs_initialize:ReadCacheInfo:Fopen', errMsg);
+
+        % create the structure from the file
+        cacheInfo.name = sscanf(fgetl(fileId), 'name %s');
+        cacheInfo.date = sscanf(fgetl(fileId), 'date %f');
+        cacheInfo.size = sscanf(fgetl(fileId), 'size %d');
+        fclose(fileId);
     end
 end
 
@@ -502,10 +517,9 @@ function checkConfig(config, expectedVariables)
      % config is a struct, so look for fieldnames
      found = isfield(config, expectedVariables);
      notFoundIdx = find(~found);
-     if numel(notFoundIdx) > 0
-         error('ncs_initialize:CheckConfigFile', ...
-             '** The following %d variables must be present either in the config struct or the provided config file: %s **', ...
-             numel(notFoundIdx), strjoin(expectedVariables(notFoundIdx), ','));
-     end
+     assert(numel(notFoundIdx) == 0, ...
+        'ncs_initialize:CheckConfigFile', ...
+         '** The following %d variables must be present either in the config struct or the provided config file: %s **', ...
+         numel(notFoundIdx), strjoin(expectedVariables(notFoundIdx), ','));     
 end
 

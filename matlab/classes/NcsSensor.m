@@ -1,18 +1,6 @@
 classdef NcsSensor < handle
     % Wrapper class for (linear) sensors in an NCS to provide a consistent
     % interface.
-    % In particular, event-based data transmission is supported in terms of
-    % the send-on-delta strategy.
-    %
-    % Literature: 
-    %  	Marek Miskowicz,
-    %   Send-On-Delta Concept: An Event-Based Data Reporting Strategy,
-    %   Sensors, vol. 6, no. 1, pp. 49-83, 2006.
-    %
-    %   Joris Sijs, Benjamin Noack, Mircea Lazar, Uwe D. Hanebeck,
-    %   Event-Based Control and Signal Processing,
-    %   Chapter 13 (Time-Periodic State Estimation with Event-Based Measurement Updates),
-    %   CRC Press, Nov. 2015.
     
     % >> This function/class is part of CoCPN-Sim
     %
@@ -39,42 +27,13 @@ classdef NcsSensor < handle
     %    You should have received a copy of the GNU General Public License
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
     
-    properties (Access = private, Constant)
-        defaultMeasurementDelta = 10;
-    end
-    
     properties (SetAccess = immutable, GetAccess = protected)
         sensor@LinearMeasurementModel;
     end
     
-    properties (SetAccess = immutable, GetAccess = public)
-        % disable send-on-delta by default
-        isEventBased@logical = false;
-    end
-    
-    properties (Access = public)
-        % measurements delta (for the send-on-delta strategy)
-        measurementDelta = NcsSensor.defaultMeasurementDelta;%-1;%5;
-    end
-    
-    properties (Access = private)
-        % previously sent measurement
-        lastSentMeasurement;
-    end
-    
-    methods
-        function set.measurementDelta(this, newMeasurementDelta)
-            assert(Checks.isNonNegativeScalar(newMeasurementDelta), ...
-                'NcsSensor:SetMeasurementDelta:InvalidDelta', ...
-                '** <newMeasurementDelta> must be a nonnegative scalar **');
-
-            this.measurementDelta = newMeasurementDelta;
-        end
-    end
-    
     methods (Access = public)
         %% NcsSensor
-        function this = NcsSensor(sensorModel, isEventBased)
+        function this = NcsSensor(sensorModel)
             % Class constructor.
             %
             % Parameters:
@@ -85,10 +44,7 @@ classdef NcsSensor < handle
             %   << this (NcsSensor)
             %      A new NcsSensor instance.
             
-            this.sensor = sensorModel;
-            if nargin == 2 && ~isempty(isEventBased)
-                this.isEventBased = isEventBased;
-            end
+            this.sensor = sensorModel;           
         end
         
         %% step
@@ -108,29 +64,19 @@ classdef NcsSensor < handle
             % Returns:
             %   << dataPacket (DataPacket or empty matrix)
             %      The data packet containing the measurement (as column vector) to be transmitted to the controller.
-            %      Empty matrix is returned in case none is taken or to be transmitted (e.g., when the sensor is event-based).
+            %      Empty matrix is returned in case none is taken.
             %
             
-            % take a measurement y_k
-            measurement = this.sensor.simulate(plantState);
-
-            % perform send-on-delta strategy
-            if this.checkSendMeasurement(measurement)
-                this.lastSentMeasurement = measurement;
-                % the measurement is transmitted from the sensor (id = 3) to the controller (id = 2)
-                dataPacket = CreateDataPacket(measurement, timestep, 3, 2);
-            else
-                % do not send the measurement
-                dataPacket = [];
-            end
+            % take a measurement y_k and create packet
+            dataPacket = NcsSensor.createDataPacket(this.sensor.simulate(plantState), timestep);
         end
     end
     
-    methods (Access = private)
-        %% checkSendMeasurement
-        function sendMeas = checkSendMeasurement(this, measurement)
-            sendMeas = isempty(this.lastSentMeasurement) || ~this.isEventBased ...
-                || norm(this.lastSentMeasurement - measurement) > this.measurementDelta;
+    methods (Access = protected, Static)
+        %% createDataPacket
+        function dataPacket = createDataPacket(measurement, timestep)
+            % the measurement is transmitted from the sensor (id = 3) to the controller (id = 2)
+            dataPacket = CreateDataPacket(measurement, timestep, 3, 2);
         end
     end
 end

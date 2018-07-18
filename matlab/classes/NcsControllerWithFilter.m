@@ -35,6 +35,10 @@ classdef NcsControllerWithFilter < NcsController
     
     properties (Access = private)
         bufferedControlInputSequences;
+
+    end
+    
+    properties (SetAccess = immutable, GetAccess = protected)
         defaultInput;
     end
     
@@ -121,7 +125,7 @@ classdef NcsControllerWithFilter < NcsController
             %      The data packet containing new control sequence computed
             %      by the controller, with the individual inputs column-wise arranged,
             %      to be transmitted to the actuator.
-            %      Empty matrix is returned in case none is to be transmitted (e.g., when the controller is event-based).
+            %      Empty matrix is returned in case none is to be transmitted.
             %
             %   << numUsedMeas (Nonnegative integer)
             %      The number of measurements actually used for the
@@ -140,46 +144,87 @@ classdef NcsControllerWithFilter < NcsController
             % estimate
            
             % first, update the estimate, i.e., obtain x_k
-            % we need a special treatment for the DelayedModeIMMF
-            if Checks.isClass(this.filter, 'DelayedModeIMMF')
+            [numUsedMeas, numDiscardedMeas, previousMode] ...
+                = this.updateControllerState(scPackets, acPackets, timestep, plantMode);
+           
+            % compute the control inputs u_k, ..., u_{k+N}, i.e, sequence U_k
+            % use (previous!) true mode (theta_{k-1}) or estimated mode of augmented system
+            % and use xhat_k
+            inputSequence = this.computeControlInputSequence(previousMode, timestep);
+                        
+            % finally, create the data packet, if sequence was created           
+            % update the buffer for the filter
+            if ~isempty(inputSequence)
+                dataPacket = NcsController.createControlSequenceDataPacket(timestep, inputSequence);
+            else
+                inputSequence = repmat(this.defaultInput, 1, this.controlSequenceLength);
+                dataPacket = [];
+            end
+            this.updateControlSequencesBuffer(inputSequence);
+            
+            if nargout == 4
+                controllerState = this.getControllerState();
+            end
+        end
+    end
+    
+    methods (Access = protected)
+        %% getControllerState
+        function controllerState = getControllerState(this)
+            [controllerState, ~] = this.filter.getStateMeanAndCov();
+                % shift controller state if required, to be expressed with
+                % regards to the plant coordinates
+                if ~isempty(this.plantStateOrigin)
+                    controllerState = controllerState + this.plantStateOrigin;
+                end
+        end
+        
+        %% updateControllerState
+        function [numUsedMeas, numDiscardedMeas, previousMode] = updateControllerState(this, scPackets, acPackets, timestep, plantMode)
+             if Checks.isClass(this.filter, 'DelayedModeIMMF')
                 [numUsedMeas, numDiscardedMeas, previousMode] ...
                     = this.updateEstimateDelayedModeIMMF(scPackets, acPackets, timestep, plantMode);
             else
                 [numUsedMeas, numDiscardedMeas, previousMode] = this.updateEstimate(scPackets, timestep);
             end
-
-            this.bufferedControlInputSequences = circshift(this.bufferedControlInputSequences, 1, 3);
+           
             % if previous true mode is unknown, some sort of certainty equivalence: use mode estimate
             % instead of true mode
             if ~isempty(plantMode)
                 % should only happen in case of Tcp-like network
                 previousMode = plantMode;
             elseif isempty(previousMode)
-                 error('NcsControllerWithFilter:Step:MissingPreviousPlantMode', ...
+                 error([class(this) ':Step:MissingPreviousPlantMode'], ...
                     '** Cannot compute U_k: Neither previous plant mode nor its estimate present **');
             end
-            % compute the control inputs u_k, ..., u_{k+N}, i.e, sequence U_k
-            % use (previous!) true mode (theta_{k-1}) or estimated mode of augmented system
-            % and use xhat_k
-            inputSequence = this.computeControlInputSequence(previousMode, timestep);
-            dataPacket = NcsController.createControlSequenceDataPacket(timestep, inputSequence);
+        end
+        
+        %% updateControlSequencesBuffer
+        function updateControlSequencesBuffer(this, controlSequenceToBuffer)
+            this.bufferedControlInputSequences = circshift(this.bufferedControlInputSequences, 1, 3);
             
-            % finally, update the buffer for the filter
-            if ~isempty(inputSequence)
-                this.bufferedControlInputSequences(:,:, 1) = inputSequence;
-            else
-                this.bufferedControlInputSequences(:,:, 1) ...
-                    = repmat(this.defaultInput, 1, this.controlSequenceLength);
-            end
-            
-            if nargout == 4
-                [controllerState, ~] = this.filter.getStateMeanAndCov();
-                % shift controller state if required, to be expressed with
-                % regards to the plant coordinates
-                if ~isempty(this.plantStateOrigin)
-                    controllerState = controllerState + this.plantStateOrigin;
-                end
-            end
+            this.bufferedControlInputSequences(:,:, 1) = controlSequenceToBuffer;           
+        end
+        
+         %% computeControlInputSequence
+        function inputSequence = computeControlInputSequence(this, varargin)
+            % Compute a sequence of control inputs to apply based on the most recent estimate of the associated filter.
+            %
+            % Parameters:
+            %   >> varargin (Optional arguments)
+            %      Any optional arguments for the controller, such as current time step (e.g., if the controller's horizon is not infinite) or 
+            %      the previous (estimated) mode of the controllor-actuator-plant subsystem.
+            %
+            % Returns:
+            %   << inputSequence (Matrix, might be empty)
+            %      A matrix, where the elements of the sequence are column-wise arranged.
+            %      The empty matrix is returned in case no sequence was
+            %      created by the controller, for instance, if, in an
+            %      event-triggered setting, none is to be transmitted.
+            %      
+            %
+            inputSequence = ...
+                this.reshapeInputSequence(this.controller.computeControlSequence(this.filter.getState(), varargin{:}));
         end
     end
     
@@ -245,28 +290,8 @@ classdef NcsControllerWithFilter < NcsController
                     1:this.controlSequenceLength, 'UniformOutput', false);
             % include the default input for the last mode 
             this.plantModel.setSystemInput([cell2mat(modeSpecificInputs) this.defaultInput]);
-        end
-        
-        %% computeControlInputSequence
-        function inputSequence = computeControlInputSequence(this, varargin)
-            % Compute a sequence of control inputs to apply based on the most recent estimate of the associated filter.
-            %
-            % Parameters:
-            %   >> varargin (Optional arguments)
-            %      Any optional arguments for the controller, such as current time step (e.g., if the controller's horizon is not infinite) or 
-            %      the previous (estimated) mode of the controllor-actuator-plant subsystem.
-            %
-            % Returns:
-            %   << inputSequence (Matrix, might be empty)
-            %      A matrix, where the elements of the sequence are column-wise arranged.
-            %      The empty matrix is returned in case no sequence was
-            %      created by the controller, for instance, if, in an
-            %      event-triggered setting, none is to be transmitted.
-            %      
-            %
-            inputSequence = ...
-                this.reshapeInputSequence(this.controller.computeControlSequence(this.filter.getState(), varargin{:}));
-        end
+        end       
+       
     end
     
     methods (Static, Access = private)

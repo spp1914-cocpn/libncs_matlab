@@ -17,7 +17,9 @@ function [pktsOut, stats] = ncs_doLoopStep(handle, timestamp)
     %   << stats (Struct)
     %     Struct containing statistical data gathered during the execution
     %     of the control cycle. At least the following fields are present:
-    %     -actual_qoc (Nonnegative integer), indicating the current Quality of Control
+    %     -actual_qoc (Nonnegative scalar), indicating the current Quality of Control
+    %     -actual_stagecosts (Nonnegative scalar), indicating the current
+    %     stage costs according the controller's underlying cost functional
     %     -sc_delays (Column vector of nonnegative integers, might be empty), 
     %     describing the delays (in time steps) the processed DataPackets sent from the sensor experienced
     %     -ca_delays (Column vector of nonnegative integers, might be empty), 
@@ -96,6 +98,7 @@ function [pktsOut, stats] = ncs_doLoopStep(handle, timestamp)
     pktsOut = constructPacketsToSend(controllerActuatorPacket, sensorControllerPacket, controllerAck);
     
     stats.actual_qoc = ncs.getQualityOfControl(timestep);
+    stats.actual_stagecosts = ncs.getStageCosts(timestep);
     % determine if sensor and/or controller do not send this time
     % determine if actuator sent out an ACK
     stats.sc_sent = ~isempty(sensorControllerPacket);

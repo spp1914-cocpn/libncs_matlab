@@ -177,6 +177,33 @@ classdef NetworkedControlSystem < handle
             statistics = this.statistics;
         end
         
+        %% getStageCosts
+        function currentStageCosts = getStageCosts(this, timestep)
+            % Get the current stage costs for the given plant
+            % true state.
+            %
+            % Parameters:
+            %   >> timestep (Positive integer)
+            %      The current time step, i.e., the integer yielding the
+            %      current simulation time (in s) when multiplied by the
+            %      loop's sampling interval.
+            %
+            % Returns:
+            %   << stageCosts (Nonnegative scalar)
+            %      The current stage costs according to the controller's underlying cost functional.
+            
+            this.checkPlant();
+            
+            if isempty(this.plantState)
+                % happens only if plant was not (yet) initialized
+                currentStageCosts = 0;
+            else
+                % use stored x_k and u_k
+                currentStageCosts = this.controller.getCurrentStageCosts(this.statistics.trueStates(:, timestep + 1), ...
+                    this.statistics.appliedInputs(:, timestep), timestep);
+            end
+        end
+        
         %% getQualityOfControl
         function currentQoC = getQualityOfControl(this, timestep)
             % Get the current quality of control (QoC).
