@@ -311,6 +311,53 @@ classdef NetworkedControlSystemTest < matlab.unittest.TestCase
             this.verifyTrue(isfield(actualStatistics, 'controllerStates'));
         end
         
+        %% testGetStageCostsNoPlant
+        function testGetStageCostsNoPlant(this)
+            % initially, the plant is not set
+            % assert this
+            this.assertEmpty(this.ncsUnderTest.plant);
+            expectedErrId = 'NetworkedControlSystem:CheckPlant';
+            
+            this.verifyError(@() this.ncsUnderTest.getStageCosts(1), expectedErrId);
+        end
+        
+         %% testGetStageCostsNotInitialized
+        function testGetStageCostsNotInitialized(this)
+            this.ncsUnderTest.controller = this.controllerSubsystem;
+            this.ncsUnderTest.plant = this.plantSubsystem;
+            this.assertNotEmpty(this.ncsUnderTest.plant);
+            % plant was set, but not initialized
+            % we expect zero to be returned independent of timestep
+            
+            this.verifyEqual(this.ncsUnderTest.getStageCosts(1), 0);
+            this.verifyEqual(this.ncsUnderTest.getStageCosts(10), 0);
+        end
+        
+        %% testGetStageCosts
+        function testGetStageCosts(this)
+            % set and initalize plant, controller, sensor
+            this.ncsUnderTest.plant = this.plantSubsystem;
+            this.assertNotEmpty(this.ncsUnderTest.plant);
+            this.ncsUnderTest.controller = this.controllerSubsystem;
+            this.filter.setState(this.plantStateDistribution);
+            this.ncsUnderTest.sensor = this.sensorSubsystem;
+            
+            % initialize plant with deterministic state
+            this.ncsUnderTest.initPlant(this.plantState);
+            this.ncsUnderTest.initStatisticsRecording(this.maxLoopSteps);
+            
+            % perform a control cycle without any data packets
+            % so there is no input
+            timestep = 1;
+            this.ncsUnderTest.step(timestep, [], [], []);
+            stats = this.ncsUnderTest.getStatistics().trueStates;
+            trueState = stats(:, timestep + 1);
+            
+            expectedStageCosts = trueState' * this.Q * trueState;
+            actualStageCosts = this.ncsUnderTest.getStageCosts(timestep);
+            this.verifyEqual(actualStageCosts, expectedStageCosts);
+         end
+        
         %% testGetQualityOfControlNoPlant
         function testGetQualityOfControlNoPlant(this)
             % initially, the plant is not set
@@ -318,7 +365,7 @@ classdef NetworkedControlSystemTest < matlab.unittest.TestCase
             this.assertEmpty(this.ncsUnderTest.plant);
             expectedErrId = 'NetworkedControlSystem:CheckPlant';
             
-            this.verifyError(@() this.ncsUnderTest.getQualityOfControl(), expectedErrId);
+            this.verifyError(@() this.ncsUnderTest.getQualityOfControl(1), expectedErrId);
         end
         
         %% testGetQualityOfControlNotInitialized
@@ -327,9 +374,10 @@ classdef NetworkedControlSystemTest < matlab.unittest.TestCase
             this.ncsUnderTest.plant = this.plantSubsystem;
             this.assertNotEmpty(this.ncsUnderTest.plant);
             % plant was set, but not initialized
-            % we expect zero to be returned
+             % we expect zero to be returned independent of timestep
             
             this.verifyEqual(this.ncsUnderTest.getQualityOfControl(1), 0);
+            this.verifyEqual(this.ncsUnderTest.getQualityOfControl(10), 0);
         end
         
         %% testGetQualityOfControl

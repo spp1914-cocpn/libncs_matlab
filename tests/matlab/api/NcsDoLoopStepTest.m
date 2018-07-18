@@ -126,7 +126,7 @@ classdef NcsDoLoopStepTest < matlab.unittest.TestCase
                  DelayedKFSystemModel(this.A, this.B, Gaussian(zeros(this.dimX, 1), this.W), ...
                 this.controlSeqLength + 1, this.maxMeasDelay, [1/3 1/3 1/3]), ...
                 this.sensor, zeros(this.dimU, 1));
-            this.ncs.sensor = NcsSensor(this.sensor, false);
+            this.ncs.sensor = NcsSensor(this.sensor);
             this.ncs.initPlant(this.zeroPlantState);
             
             this.ncs.initStatisticsRecording(this.maxLoopSteps);
@@ -226,6 +226,10 @@ classdef NcsDoLoopStepTest < matlab.unittest.TestCase
             this.verifyTrue(isfield(stats, 'actual_qoc'));
             this.verifyThat(stats.actual_qoc, IsScalar);
             this.verifyGreaterThanOrEqual(stats.actual_qoc, 0);
+            
+            this.verifyTrue(isfield(stats, 'actual_stagecosts'));
+            this.verifyThat(stats.actual_stagecosts, IsScalar);
+            this.verifyGreaterThanOrEqual(stats.actual_stagecosts, 0);
             
             % one sc packet was received with delay 1
             this.verifyTrue(isfield(stats, 'sc_delays'));

@@ -102,7 +102,7 @@ classdef NcsFinalizeTest < matlab.unittest.TestCase
                  DelayedKFSystemModel(this.A, this.B, Gaussian(zeros(this.dimX, 1), this.W), ...
                 this.controlSeqLength + 1, this.maxMeasDelay, [1/3 1/3 1/3]), ...
                 this.sensor, zeros(this.dimU, 1));
-            this.ncs.sensor = NcsSensor(this.sensor, false);
+            this.ncs.sensor = NcsSensor(this.sensor);
             this.ncs.initPlant(this.zeroPlantState);
             
             this.ncs.initStatisticsRecording(this.maxLoopSteps);

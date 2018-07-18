@@ -1,5 +1,5 @@
-classdef NcsSensorTest < matlab.unittest.TestCase
-    % Test cases for NcsSensor.
+classdef EventBasedNcsSensorTest < matlab.unittest.TestCase
+    % Test cases for EventBasedNcsSensor.
     
     % >> This function/class is part of CoCPN-Sim
     %
@@ -26,13 +26,21 @@ classdef NcsSensorTest < matlab.unittest.TestCase
     %    You should have received a copy of the GNU General Public License
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
     
-    properties (Access = private)
+   properties (Access = private)
         dimMeas;
         dimPlant;
         C;
         V;
         measModel;
         ncsSensorUnderTest;
+        defaultMeasDelta;
+    end
+    
+    methods (Access = private)
+        %% setMeasDelta
+        function setMeasDelta(this, measDelta)
+            this.ncsSensorUnderTest.measurementDelta = measDelta;
+        end
     end
     
     methods (TestMethodSetup)
@@ -42,26 +50,45 @@ classdef NcsSensorTest < matlab.unittest.TestCase
             this.dimPlant = 3;
             this.C = [1 2 3];
             this.V = 0.1^2; % variance of the meas noise
+            this.defaultMeasDelta = 2;
      
             this.measModel = LinearMeasurementModel(this.C);
             this.measModel.setNoise(Gaussian(0, this.V));
-            this.ncsSensorUnderTest = NcsSensor(this.measModel);
+            
+            this.ncsSensorUnderTest = EventBasedNcsSensor(this.measModel, this.defaultMeasDelta);
         end
     end
     
     methods (Test)
-        %% testNcsSensor
-        function testNcsSensor(this)
-            ncsSensor = NcsSensor(this.measModel);
-            % this call should not crash            
+        %% testEventBasedNcsSensor
+        function testEventBasedNcsSensor(this)
+            ncsSensor = EventBasedNcsSensor(this.measModel);
+            % the default setting of the class
+            this.verifyEqual(ncsSensor.measurementDelta, 10);
         end
         
-                
+        %% testSetMeasurementDelta
+        function testSetMeasurementDelta(this)
+            expectedErrId = 'EventBasedNcsSensor:SetMeasurementDelta:InvalidDelta';
+            
+            invalidMeasDelta = this; % not a scalar
+            this.verifyError(@() this.setMeasDelta(invalidMeasDelta), expectedErrId);
+            
+            invalidMeasDelta = -eps; % not nonnegative
+            this.verifyError(@() this.setMeasDelta(invalidMeasDelta), expectedErrId);
+            
+            % now a succesfult try
+            newMeasDelta = 1000;
+            this.setMeasDelta(newMeasDelta)
+            this.verifyEqual(this.ncsSensorUnderTest.measurementDelta, newMeasDelta);
+        end
+        
         %% testStep
         function testStep(this)
             import matlab.unittest.constraints.IsScalar;
             plantState = [2 3 4]';
             timestep = 1;
+            this.assertEqual(this.ncsSensorUnderTest.measurementDelta, this.defaultMeasDelta);
             
             rng(1); % seed
             measurementPacket = this.ncsSensorUnderTest.step(timestep, plantState);
@@ -81,11 +108,9 @@ classdef NcsSensorTest < matlab.unittest.TestCase
             % and use the same seed to obtain the same measurement
             rng(1);
             measurementPacket2 = this.ncsSensorUnderTest.step(timestep, plantState);
-            this.verifyNotEmpty(measurementPacket2);
-            this.verifyEqual(measurementPacket.timeStamp, timestep)
-            this.verifyEqual(measurementPacket.sourceAddress, 3)
-            this.verifyEqual(measurementPacket.destinationAddress, 2)
+            this.verifyEmpty(measurementPacket2);
         end
     end
+    
 end
 
