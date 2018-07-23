@@ -128,7 +128,7 @@ classdef NcsController < handle
             
             if nargout == 4
                 % retrieve state before sequence is computed
-                controllerState = this.controller.getControllerPlantState(this);
+                controllerState = this.controller.getControllerPlantState();
                 % shift controller state if required, to be expressed with
                 % regards to the plant coordinates
                 if ~isempty(this.plantStateOrigin)
