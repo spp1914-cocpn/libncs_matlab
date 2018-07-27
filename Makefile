@@ -17,7 +17,7 @@ $(BUILD_DIR):
 $(LIBNAME): $(BUILD_DIR) $(BUILD_DIR)/$(LIBNAME).so
 
 $(BUILD_DIR)/$(LIBNAME).so: $(SRC_FILES)
-	$(MCC) $(MCC_FLAGS) -B cpplib:$(LIBNAME) $(API_FILES) -I $(SRC_DIR)/classes -I $(SRC_DIR)/functions -I $(MLIB_DIR) -a $(MLIB_DIR) -d $(BUILD_DIR) 
+	$(MCC) $(MCC_FLAGS) -B cpplib:$(LIBNAME) $(API_FILES) -I $(SRC_DIR)/classes -I $(SRC_DIR)/functions -I $(MLIB_DIR)/Classes -I $(MLIB_DIR)/external -a $(MLIB_DIR)/Classes -a $(MLIB_DIR)/external -d $(BUILD_DIR) 
 	@rm -f $(BUILD_DIR)/$(LIBNAME).cpp
 
 clean:
