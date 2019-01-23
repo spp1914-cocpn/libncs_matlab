@@ -12,7 +12,7 @@ classdef NetworkedControlSystem < handle
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
     %                        Karlsruhe Institute of Technology (KIT), Germany
     %
-    %                        http://isas.uka.de
+    %                        https://isas.iar.kit.edu
     %
     %    This program is free software: you can redistribute it and/or modify
     %    it under the terms of the GNU General Public License as published by
@@ -295,8 +295,8 @@ classdef NetworkedControlSystem < handle
             % do not pass the previous plant mode to the controller unless
             % network is TCP-like
             previousMode = [];
-            if this.networkType == NetworkType.TcpLike
-                previousMode = this.plantMode;
+            if this.networkType.previousPlantModeAvailable()
+                 previousMode = this.plantMode;
             end
             
             [controllerActuatorPacket, numUsedMeas, numDiscardedMeas, controllerState] ...
@@ -309,13 +309,11 @@ classdef NetworkedControlSystem < handle
             
             [controllerAck, numDiscardedSeq, actualInput, this.plantMode, newPlantState] ...
                 = this.plant.step(timestep, caPackets, this.plantState);
-                                 
-            if this.networkType ~= NetworkType.UdpLikeWithAcks
-                % we do not send ACKs back to the controller in case of
-                % TCP-like or UDP-like communication
+             
+            if ~this.networkType.sendOutAck()
                 controllerAck = [];
             end
- 
+            
             % record the number of discarded control packets            
             this.statistics.numDiscardedControlSequences(timestep) = numDiscardedSeq;
             % record the data about true input and state
@@ -326,6 +324,53 @@ classdef NetworkedControlSystem < handle
             this.plantState = newPlantState;
         end
        
+        %% changeControllerSequenceLength
+        function success = changeControllerSequenceLength(this, newSequenceLength)
+            % Change the length of the control sequence used by the
+            % controller in the NCS. This operation does nothing if this is
+            % not supported by the controller.
+            %
+            % Parameters:
+            %   >> newSequenceLength (Positive integer)
+            %      The new sequence length to used by the controller.
+            %
+            % Returns:
+            %   << success (Logical Scalar, i.e., a boolean)
+            %      A flag indicating whether the sequence length of the
+            %      employed controller was changed. 
+            %      False is returned in case the controller does not support this.
+            
+            this.checkController();
+            this.checkPlant();
+           
+            success = this.controller.changeSequenceLength(newSequenceLength);
+            if success
+                % requires that the actuator also changes its sequence
+                % length
+                this.plant.changeActuatorSequenceLength(newSequenceLength);
+            end
+        end
+        
+        %% changeControllerCaDelayProbs
+        function success = changeControllerCaDelayProbs(this, newCaDelayProbs)
+            % Change thethe probability distribution of the delays in the
+            % controller-actuator link assumed by the controller in the NCS. 
+            % This operation does nothing if this is not supported by the controller.
+            %
+            % Parameters:
+            %   >> newCaDelayProbs (Nonnegative vector)
+            %      The new probability distribution to be assumed by the controller.
+            %
+            % Returns:
+            %   << ret (Logical Scalar, i.e., a boolean)
+            %      A flag indicating whether the probability distribution
+            %      was changed.
+            %      False is returned in case the controller does not support this.
+            
+            this.checkController();
+            
+            success = this.controller.changeCaDelayProbs(newCaDelayProbs);
+        end
     end
     
     methods(Access = private)

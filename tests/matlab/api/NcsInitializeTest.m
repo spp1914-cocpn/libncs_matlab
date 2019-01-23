@@ -11,7 +11,7 @@ classdef NcsInitializeTest < matlab.unittest.TestCase
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
     %                        Karlsruhe Institute of Technology (KIT), Germany
     %
-    %                        http://isas.uka.de
+    %                        https://isas.iar.kit.edu
     %
     %    This program is free software: you can redistribute it and/or modify
     %    it under the terms of the GNU General Public License as published by
@@ -304,10 +304,18 @@ classdef NcsInitializeTest < matlab.unittest.TestCase
         function testInvalidInfiniteHorizonUdpLikeController(this)
             expectedErrId = 'ncs_initialize:InitController:InfiniteHorizonUdpLikeController';
             
-             % we do not pass delays for the sc link
+            % we do not pass delays for the sc link
             this.configStruct.controllerClassName = 'InfiniteHorizonUdpLikeController';
+            this.configStruct.initialEstimate = Gaussian(zeros(this.dimX, 1), eye(this.dimX));
             this.verifyError(@() ncs_initialize(this.maxSimTime, this.id, this.configStruct, this.matFilename), ...
-                expectedErrId);              
+                expectedErrId);    
+            
+            % we do not pass an initial estimate
+            this.configStruct.controllerClassName = 'InfiniteHorizonUdpLikeController';
+            this.configStruct = rmfield(this.configStruct, 'initialEstimate');
+            this.configStruct.scDelayProbs = this.caDelayProbs;
+            this.verifyError(@() ncs_initialize(this.maxSimTime, this.id, this.configStruct, this.matFilename), ...
+                expectedErrId); 
         end
         
         %% test
@@ -408,6 +416,7 @@ classdef NcsInitializeTest < matlab.unittest.TestCase
             
             this.configStruct.filterClassName = 'DelayedModeIMMF';
             this.configStruct.initialEstimate = Gaussian(expectedMean, expectedCov);
+            this.configStruct.controllerEventBased = false; 
             
             ncsHandle = ncs_initialize(this.maxSimTime, this.id, this.configStruct, this.matFilename);
             
@@ -470,6 +479,7 @@ classdef NcsInitializeTest < matlab.unittest.TestCase
             expectedMean = ones(this.dimX, 1);
             expectedCov = 0.5 * eye(this.dimX);
             expectedControllerDeadband = 50;
+            expectedControllerEventTrigger = EventBasedControllerTriggerCriterion.Sequence;
             
             this.configStruct.filterClassName = 'DelayedModeIMMF';
             this.configStruct.initialEstimate = Gaussian(expectedMean, expectedCov);
@@ -493,6 +503,7 @@ classdef NcsInitializeTest < matlab.unittest.TestCase
             this.verifyEmpty(ncs.controller.controller.setpoint);
             this.verifyEmpty(ncs.controller.plantStateOrigin);
             this.verifyEqual(ncs.controller.deadband, expectedControllerDeadband);
+            this.verifyEqual(ncs.controller.eventTrigger, expectedControllerEventTrigger);
             
             this.verifyClass(ncs.controller.filter, ?DelayedModeIMMF);
             [actualMean, actualCov] = ncs.controller.filter.getStateMeanAndCov();
@@ -505,12 +516,14 @@ classdef NcsInitializeTest < matlab.unittest.TestCase
             expectedMean = ones(this.dimX, 1);
             expectedCov = 0.5 * eye(this.dimX);
             expectedControllerDeadband = 50;
+            expectedControllerEventTrigger = EventBasedControllerTriggerCriterion.QoC;
             expectedPlantStateOrigin = 2 * ones(this.dimX, 1);
             
             this.configStruct.filterClassName = 'DelayedModeIMMF';
             this.configStruct.initialEstimate = Gaussian(expectedMean, expectedCov);
             this.configStruct.controllerEventBased = true;
             this.configStruct.controllerDeadband = expectedControllerDeadband;
+            this.configStruct.controllerEventTrigger = expectedControllerEventTrigger;
             this.configStruct.linearizationPoint = expectedPlantStateOrigin;
             
             ncsHandle = ncs_initialize(this.maxSimTime, this.id, this.configStruct, this.matFilename);
@@ -530,7 +543,8 @@ classdef NcsInitializeTest < matlab.unittest.TestCase
             this.verifyEmpty(ncs.controller.controller.setpoint);
             this.verifyEqual(ncs.controller.plantStateOrigin, expectedPlantStateOrigin);
             this.verifyEqual(ncs.controller.deadband, expectedControllerDeadband);
-            
+            this.verifyEqual(ncs.controller.eventTrigger, expectedControllerEventTrigger);
+                        
             this.verifyClass(ncs.controller.filter, ?DelayedModeIMMF);
             [actualMean, actualCov] = ncs.controller.filter.getStateMeanAndCov();
             this.verifyEqual(actualMean, expectedMean, 'AbsTol', 1e-8);

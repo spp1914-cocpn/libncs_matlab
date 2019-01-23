@@ -39,10 +39,9 @@ function packet = ncs_pktCreate(srcAddr, dstAddr, payload)
     % we expect the deserialized payload to be a 4x1 or 1x4 cell array
     % timestamp, isAck, id, payload
     data = getArrayFromByteStream(payload);
-    if ~iscell(data) || numel(data) ~= 4
-        error('ncs_pktCreate:InvalidPayloadStructure', ...
-          '** deserialized <payload> expected to be a cell array with 4 elements **');
-    end
+    assert(iscell(data) && numel(data) == 4, ...    
+        'ncs_pktCreate:InvalidPayloadStructure', ...
+        '** Deserialized <payload> expected to be a cell array with 4 elements **');
     
     % construct/restore the packet
     % addresses start at 1 in Matlab!

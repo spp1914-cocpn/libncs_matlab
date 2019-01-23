@@ -11,7 +11,7 @@ classdef NcsPlantTest < matlab.unittest.TestCase
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
     %                        Karlsruhe Institute of Technology (KIT), Germany
     %
-    %                        http://isas.uka.de
+    %                        https://isas.iar.kit.edu
     %
     %    This program is free software: you can redistribute it and/or modify
     %    it under the terms of the GNU General Public License as published by
@@ -115,7 +115,71 @@ classdef NcsPlantTest < matlab.unittest.TestCase
             this.verifyEqual(plantMode, expectedMode);
             this.verifyEqual(actualInput, expectedInput);
             this.verifyNotEmpty(newPlantState);
-       end
+        end
+       
+        %% testChangeActuatorSequenceLength
+        function testChangeActuatorSequenceLength(this)
+            plantState = [2 3 4]';
+            timestep = 2;
+            id= 42;
+            newSeqLength = 1;
+                       
+            dataPacket = DataPacket(this.controlSequence(:, 1:newSeqLength), timestep, id);
+            dataPacket.packetDelay = 0;
+            dataPacket.sourceAddress = 2;
+            dataPacket.destinationAddress = 1;
+            caPackets = dataPacket;
+            
+            % now change the sequence length
+            this.ncsPlantUnderTest.changeActuatorSequenceLength(newSeqLength);
+            % then perform a step
+            [controllerAck, numDiscardedSeq, actualInput, plantMode, newPlantState] ...
+                = this.ncsPlantUnderTest.step(timestep + dataPacket.packetDelay, caPackets, plantState);
+            
+            expectedMode = dataPacket.packetDelay + 1;
+            expectedInput = this.controlSequence(:, expectedMode);
+
+            this.verifyNotEmpty(controllerAck);
+            this.verifyEqual(numDiscardedSeq, 0);
+            this.verifyEqual(plantMode, expectedMode);
+            this.verifyEqual(actualInput, expectedInput);
+            this.verifyNotEmpty(newPlantState);
+        end
+        
+        %% testChangeActuatorSequenceLengthBufferedPacket
+        function testChangeActuatorSequenceLengthBufferedPacket(this)
+            plantState = [2 3 4]';
+            timestep = 2;
+            id= 42;
+            dataPacket = DataPacket(this.controlSequence, timestep, id);
+            dataPacket.packetDelay = 0;
+            dataPacket.sourceAddress = 2;
+            dataPacket.destinationAddress = 1;
+            
+            caPackets = dataPacket;
+            % perform a step first so that packet is buffered
+            [controllerAck, numDiscardedSeq, actualInput, plantMode, newPlantState] ...
+                = this.ncsPlantUnderTest.step(timestep + dataPacket.packetDelay, caPackets, plantState);
+            this.assertNotEmpty(controllerAck); % assert that a packet is buffered
+            this.assertEqual(numDiscardedSeq, 0);
+            
+            newSeqLength = 1;
+            % now change the sequence length
+            this.ncsPlantUnderTest.changeActuatorSequenceLength(newSeqLength);
+            caPackets = [];
+            % then perform a step again
+            [controllerAck, numDiscardedSeq, actualInput, plantMode, newPlantState] ...
+                = this.ncsPlantUnderTest.step(timestep + dataPacket.packetDelay + 1, caPackets, plantState);
+            
+            expectedMode = newSeqLength + 1;
+            expectedInput = zeros(this.dimU, 1); % the default input
+
+            this.verifyEmpty(controllerAck); % we did not receive a packet from the controller
+            this.verifyEqual(numDiscardedSeq, 0);
+            this.verifyEqual(plantMode, expectedMode);
+            this.verifyEqual(actualInput, expectedInput);
+            this.verifyNotEmpty(newPlantState);
+        end
     end
 end
 

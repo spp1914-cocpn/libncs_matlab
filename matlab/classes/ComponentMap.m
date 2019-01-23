@@ -15,7 +15,7 @@ classdef (Sealed) ComponentMap < handle
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
     %                        Karlsruhe Institute of Technology (KIT), Germany
     %
-    %                        http://isas.uka.de
+    %                        https://isas.iar.kit.edu
     %
     %    This program is free software: you can redistribute it and/or modify
     %    it under the terms of the GNU General Public License as published by
@@ -36,14 +36,16 @@ classdef (Sealed) ComponentMap < handle
     end
     
     properties (Constant)
-        maxIndex = 255;
+        maxIndex = intmax('uint32');
     end
     
     methods (Access = private)
+        %% ComponentMap
         function this = ComponentMap()
             this.componentMap = containers.Map('KeyType', 'uint32', 'ValueType', 'any');
         end
         
+        %% checkIndex
         function checkIndex(this, index)
             assert(this.componentMap.isKey(index), ...
                 'ComponentMap:InvalidIndex', ...
@@ -70,10 +72,10 @@ classdef (Sealed) ComponentMap < handle
                 'ComponentMap:ComponentNotAHandle', ...
                 '** Cannot add component for it is not a handle **');
       
-            if this.containsComponent(component)
-                 error('ComponentMap:ComponentAlreadyPresent', ...
-                    '** Cannot add component for it is already contained in the map **');
-            end
+            assert(~this.containsComponent(component), ...
+                'ComponentMap:ComponentAlreadyPresent', ...
+                '** Cannot add component for it is already contained in the map **');
+            
             index = ComponentMap.getNewIndex();
             this.componentMap(index) = component;
         end
@@ -100,10 +102,10 @@ classdef (Sealed) ComponentMap < handle
             %      The component to remove from the map.
             
             index = this.getComponentIndex(component);
-            if index == -1
-                error('ComponentMap:ComponentNotPresent', ...
-                    '** Cannot remove component: It is not present in the map **');
-            end
+            assert(index ~= -1, ...
+                'ComponentMap:ComponentNotPresent', ...
+                '** Cannot remove component: It is not present in the map **');
+            
             this.componentMap.remove(index);
         end
         

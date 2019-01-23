@@ -60,6 +60,14 @@ function handle = ncs_initialize(maxSimTime, id, configStruct, filename)
     %     transmit sequences in an event-based manner (by using deadband control) (default false)
     %   - controllerDeadband: the threshold value (deadband) for decison rule the
     %     if the controller employs a deadband control strategy (nonnegative scalar)
+    %   - controllerEventTrigger: the event trigger to be used 
+    %     if the controller employs a deadband control strategy;
+    %     Possible values are given by the EventBasedControllerTriggerCriterion enum:
+    %     EventBasedControllerTriggerCriterion.QoC (or 1)
+    %     EventBasedControllerTriggerCriterion.StageCosts (or 2)
+    %     EventBasedControllerTriggerCriterion.Sequence (or 3) 
+    %     It is also possible to pass the corresponding ids instead.
+    %     The default value is EventBasedControllerTriggerCriterion.Sequence
     %   - linearizationPoint: if the controller uses a linear approximation
     %     of the nonlinear plant dynamics, the linearization point should
     %     be provided (vector)
@@ -162,6 +170,10 @@ function handle = ncs_initialize(maxSimTime, id, configStruct, filename)
             if isfield(config, 'controllerDeadband')
                 ncs.controller.deadband = config.controllerDeadband;
             end
+            % set the event trigger, if provided (else default value is used)
+            if isfield(config, 'controllerEventTrigger')
+                ncs.controller.eventTrigger = uint8(config.controllerEventTrigger);
+            end
         elseif isfield(config, 'linearizationPoint')
             ncs.controller = NcsControllerWithFilter(controller, filter, ...
                 filterSpecificPlantModel, filterSpecificSensorModel, actuator.defaultInput, config.linearizationPoint);
@@ -221,6 +233,9 @@ function controller = doControllerCacheLookup(config, configFileName, pathStr, l
                     if isequal(refTrajectory, cachedController.refTrajectory)
                         controller = cachedController;
                         if controller.sequenceLength ~= config.controlSequenceLength
+                            % use sequence length also as length of
+                            % optimization horizon
+                            controller.changeHorizonLength(config.controlSequenceLength);
                             controller.changeSequenceLength(config.controlSequenceLength);
                         end
                         % check if the constraints changed
@@ -371,6 +386,11 @@ function controller = initController(config, horizonLength)
                 '** Variable <scDelayProbs> must be present in the configuration to init %s **', ...
                     'InfiniteHorizonUdpLikeController');
             
+            assert(isfield(config, 'initialEstimate'), ...
+                'ncs_initialize:InitController:InfiniteHorizonUdpLikeController', ...
+                '** Variable <initialEstimate> must be present in the configuration to init %s **', ...
+                    'InfiniteHorizonUdpLikeController');
+                
             if isfield(config, 'G')
                 % transform the plant noise covariance
                 actualW = G * config.W * G';
@@ -386,6 +406,7 @@ function controller = initController(config, horizonLength)
                     config.caDelayProbs, config.scDelayProbs, config.controlSequenceLength, config.maxMeasDelay, ...
                     actualW, config.V);
             end
+            controller.setControllerPlantState(config.initialEstimate);
         otherwise
             error('ncs_initialize:InitController:UnsupportedControllerClass', ...
                 '** Controller class with name ''%s'' unsupported or unknown **', config.controllerClassName);
@@ -399,21 +420,11 @@ function [filter, filterPlantModel, filterSensorModel] = initFilter(config)
         '** Variable <initialEstimate> must be present in the configuration to init a filter/estimator **');
     
     caDelayProbs = config.caDelayProbs;
-    Validator.validateDiscreteProbabilityDistribution(caDelayProbs);
+    Validator.validateDiscreteProbabilityDistribution(caDelayProbs);    
+   
+    numModes = config.controlSequenceLength + 1; % number of modes of the augmented plant MJLS    
+    modeTransitionProbs = Utility.truncateDiscreteProbabilityDistribution(caDelayProbs, numModes);    
     
-    numProbs = length(caDelayProbs);
-    numModes = config.controlSequenceLength + 1; % number of modes of the augmented plant MJLS
-    
-    if numProbs < numModes
-        % fill up with zeros
-        modeTransitionProbs = [caDelayProbs(:); zeros(numModes - numProbs, 1)];
-    elseif numModes < numProbs
-        % cut the distribution and fill up with an entry so that
-        % sum is 1 again
-        modeTransitionProbs = [caDelayProbs(1:1:numModes -1), 1 - sum(caDelayProbs(1:1:numModes -1))];
-    else
-        modeTransitionProbs = caDelayProbs(:);
-    end
     transitionMatrix = Utility.calculateDelayTransitionMatrix(modeTransitionProbs); 
     filterPlantModel = [];
     filterSensorModel = [];

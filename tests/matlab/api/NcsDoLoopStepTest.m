@@ -11,7 +11,7 @@ classdef NcsDoLoopStepTest < matlab.unittest.TestCase
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
     %                        Karlsruhe Institute of Technology (KIT), Germany
     %
-    %                        http://isas.uka.de
+    %                        https://isas.iar.kit.edu
     %
     %    This program is free software: you can redistribute it and/or modify
     %    it under the terms of the GNU General Public License as published by
@@ -166,6 +166,18 @@ classdef NcsDoLoopStepTest < matlab.unittest.TestCase
             
             invalidTimestamp = 1.5; % positive, but fractional            
             this.verifyError(@() ncs_doLoopStep(this.ncsHandle, invalidTimestamp), expectedErrId);
+        end
+        
+        %% testInvalidParamStruct
+        function testInvalidParamStruct(this)
+            expectedErrId = 'ncs_doLoopStep:InvalidParamStruct';
+            
+            invalidStruct = this; % not a struct
+            this.verifyError(@() ncs_doLoopStep(this.ncsHandle, this.timestamp, invalidStruct), expectedErrId);
+          
+            newInvalidStruct(2).A = 5; 
+            newInvalidStruct(1).A = 5; % not a scalar struct
+            this.verifyError(@() ncs_doLoopStep(this.ncsHandle, this.timestamp, newInvalidStruct), expectedErrId);
         end
         
         %% testInvalidAcPacket

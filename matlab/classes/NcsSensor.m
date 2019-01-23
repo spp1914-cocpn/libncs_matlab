@@ -12,7 +12,7 @@ classdef NcsSensor < handle
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
     %                        Karlsruhe Institute of Technology (KIT), Germany
     %
-    %                        http://isas.uka.de
+    %                        https://isas.iar.kit.edu
     %
     %    This program is free software: you can redistribute it and/or modify
     %    it under the terms of the GNU General Public License as published by
@@ -29,6 +29,11 @@ classdef NcsSensor < handle
     
     properties (SetAccess = immutable, GetAccess = protected)
         sensor@LinearMeasurementModel;
+    end
+    
+    properties(SetAccess = protected, GetAccess = public)
+        % indicate whether sensor works event-based
+        isEventBased@logical = false;
     end
     
     methods (Access = public)

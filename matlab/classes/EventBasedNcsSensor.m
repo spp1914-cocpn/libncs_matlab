@@ -22,7 +22,7 @@ classdef EventBasedNcsSensor < NcsSensor
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
     %                        Karlsruhe Institute of Technology (KIT), Germany
     %
-    %                        http://isas.uka.de
+    %                        https://isas.iar.kit.edu
     %
     %    This program is free software: you can redistribute it and/or modify
     %    it under the terms of the GNU General Public License as published by
@@ -81,6 +81,7 @@ classdef EventBasedNcsSensor < NcsSensor
             if nargin == 2
                 this.measurementDelta = measurementDelta;
             end
+            this.isEventBased = true;
         end
         
         %% step

@@ -5,13 +5,13 @@ classdef NetworkType
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2017  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2017-2018  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
     %                        Karlsruhe Institute of Technology (KIT), Germany
     %
-    %                        http://isas.uka.de
+    %                        https://isas.iar.kit.edu
     %
     %    This program is free software: you can redistribute it and/or modify
     %    it under the terms of the GNU General Public License as published by
@@ -35,7 +35,18 @@ classdef NetworkType
     properties
     end
     
-    methods
+    methods (Access = public)
+        %% previousPlantModeAvailable
+        function ret = previousPlantModeAvailable(this)
+            ret = (this == NetworkType.TcpLike);
+        end
+        
+        %% sendOutAck
+        function ret = sendOutAck(this)
+            % we do not send ACKs back to the controller in case of
+            % TCP-like or UDP-like communication
+            ret = (this == NetworkType.UdpLikeWithAcks);
+        end
     end
     
 end

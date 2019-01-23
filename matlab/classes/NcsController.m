@@ -13,7 +13,7 @@ classdef NcsController < handle
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
     %                        Karlsruhe Institute of Technology (KIT), Germany
     %
-    %                        http://isas.uka.de
+    %                        https://isas.iar.kit.edu
     %
     %    This program is free software: you can redistribute it and/or modify
     %    it under the terms of the GNU General Public License as published by
@@ -35,7 +35,7 @@ classdef NcsController < handle
         plantStateOrigin; % the origin of the plant coordinate system in controller coordinates
     end
     
-    properties (SetAccess = immutable, GetAccess = public)
+    properties (SetAccess = protected, GetAccess = public)
         % indicate whether controller works event-based
         isEventBased@logical = false;
     end
@@ -66,7 +66,7 @@ classdef NcsController < handle
             %      linearization point if the controller uses a linear
             %      approximation of the plant dynamics.
             %      This vector is required to compute the quality of control
-            %      and the total control costs which are compute with
+            %      and the total control costs which are computed with
             %      respect to the controller's state variables.
             %      If left out, no offset is assumed, i.e., the zero vector.
             %
@@ -125,6 +125,12 @@ classdef NcsController < handle
             %      variables.
             
             [measurements, measDelays] = NcsController.processScPackets(scPackets);
+            [modeObservations, modeDelays] = NcsController.processAcPackets(timestep, acPackets);
+            % add the previous true mode to the mode observations, if available
+            if ~isempty(plantMode) && ~ismember(1, modeDelays)
+                modeObservations(end + 1) = plantMode;
+                modeDelays(end + 1) = 1;
+            end
             
             if nargout == 4
                 % retrieve state before sequence is computed
@@ -135,9 +141,8 @@ classdef NcsController < handle
                     controllerState = controllerState + this.plantStateOrigin;
                 end
             end
-            
             inputSequence = ...
-                this.reshapeInputSequence(this.controller.computeControlSequence(measurements, measDelays));
+                this.reshapeInputSequence(this.controller.computeControlSequence(measurements, measDelays, modeObservations, modeDelays));
             
             dataPacket = NcsController.createControlSequenceDataPacket(timestep, inputSequence);
             [numUsedMeas, numDiscardedMeas] = this.controller.getLastComputationMeasurementData();
@@ -161,7 +166,7 @@ classdef NcsController < handle
             %   << costs (Nonnegative scalar)
             %      The accrued costs according to this controller's underlying cost functional.
             
-            % we compute the accrued costs with repsect to the state
+            % we compute the accrued costs with respect to the state
             % variables of the controller
             if isempty(this.plantStateOrigin)
                 states = plantStates;
@@ -238,12 +243,111 @@ classdef NcsController < handle
                 % we track the origin
                 qoc = norm(state);
             end
-        end
+        end        
     end
   
-    methods (Access = protected)
+    methods (Access = public, Sealed)
+        %% changeSequenceLength
+        function ret = changeSequenceLength(this, newSequenceLength)
+            % Change the length of the control sequence used by the
+            % employed controller.
+            % This operation does nothing but returning false if this is not supported by the controller.
+            %
+            % Parameters:
+            %   >> newSequenceLength (Positive integer)
+            %      The new sequence length to used by the controller.
+            %
+            % Returns:
+            %   << ret (Logical Scalar, i.e., a boolean)
+            %      A flag indicating whether the sequence length of the
+            %      employed controller was changed. 
+            %      False is returned in case the controller does not support this.
+            
+            ret = false;
+            if this.canChangeSequenceLength()
+                this.controller.changeSequenceLength(newSequenceLength);
+                ret = true;
+            end
+        end
+        
+        %% changeCaDelayProbs
+        function ret = changeCaDelayProbs(this, newCaDelayProbs)
+            % Change the probability distribution of the delays in the
+            % controller-actuator link assumed by the employed controller. 
+            % This operation does nothing but returning false if this is not supported by the controller.
+            %
+            % Parameters:
+            %   >> newCaDelayProbs (Nonnegative vector)
+            %      The new probability distribution to be assumed by the controller.
+            %
+            % Returns:
+            %   << ret (Logical Scalar, i.e., a boolean)
+            %      A flag indicating whether the probability distribution
+            %      was changed.
+            %      False is returned in case the controller does not support this.
+            
+            ret = false;
+            if this.canChangeCaDelayProbs()
+                % validate the given probability distribution
+                Validator.validateDiscreteProbabilityDistribution(newCaDelayProbs);
+                % do the change
+                this.doChangeCaDelayProbs(newCaDelayProbs);
+                ret = true;
+            end
+        end
+    end
+    
+    methods (Access = protected)               
+        %% canChangeSequenceLength
+        function ret = canChangeSequenceLength(this)
+            % Determine whether the sequence length of the employed
+            % controller can be changed at runtime.
+            %
+            % Parameters:
+            %   >> ret (Logical Scalar, i.e., a boolean)
+            %      A flag indicating whether the sequence length of the
+            %      employed controller can be changed at runtime.
+            
+            ret = ismethod(this.controller, 'changeSequenceLength');
+        end
+        
+        %% canChangeCaDelayProbs
+        function ret = canChangeCaDelayProbs(this)
+            % Determine whether the delay distribution for the
+            % controller-actuator link assumed by the controller can be
+            % changed at runtime.
+            % Currently, this default implementation always returns false as this
+            % functionality is not yet implemented for the controllers (that don't require a filter) in use.
+            %
+            % Parameters:
+            %   >> ret (Logical Scalar, i.e., a boolean)
+            %      A flag indicating whether the probability distribution
+            %      can be changed at runtime.
+            
+            ret = false;
+        end
+        
+        %% doChangeCaDelayProbs
+        function doChangeCaDelayProbs(this, caDelayProbs)
+            error('NcsController:DoChangeCaDelayProbs:UnsupportedOperation', ...
+                '** This should not happen, intended to be overriden by subclasses. **');
+        end
+        
         %% reshapeInputSequence
         function sequence = reshapeInputSequence(this, inputSequence)
+            % Reshape a control sequence, so that the individual inputs are
+            % column-wise arranged.
+            %
+            % Parameters:
+            %   >> inputSequence (Column Vector, might be empty)
+            %      A vector containing the stacked control inputs constituting a sequence.
+            %
+            % Returns:
+            %   << sequence (Matrix, might be empty)
+            %      The passed control sequence, reshaped as matrix, 
+            %      with the individual inputs now column-wise arranged.
+            %      Empty matrix is returned if inputSequence is empty.
+            
             % reshape the resulting stacked vector (arrange inputs column-wise)
             if ~isempty(inputSequence)
                 sequence = reshape(inputSequence, [], this.controlSequenceLength);
@@ -254,16 +358,70 @@ classdef NcsController < handle
        
     end
     
-    methods (Static, Access = protected)
-         
+    methods (Static, Access = protected)         
         %% createControlSequenceDataPacket
          function dataPacket = createControlSequenceDataPacket(timestep, inputSequence)
+            % Create a data packet containing the given control sequence to
+            % be sent to the plant/actuator.
+            %
+            % Parameters:
+            %   >> timestep (Positive integer)
+            %      The current time step, i.e., the integer yielding the
+            %      current simulation time (in s) when multiplied by the
+            %      loop's sampling interval.
+            %
+            %   >> inputSequence (Matrix)
+            %      The control sequence to be transmitted, given as a nonempty
+            %      matrix, with the individual inputs column-wise arranged.
+            %
+            % Returns:
+            %   << dataPacket (DataPacket)
+            %      The resulting data packet to be transmitted to the actuator.
+             
             % the control sequence is transmitted from the controller (id = 2) to the actuator (id = 1)
             dataPacket = CreateDataPacket(inputSequence, timestep, 2, 1);
          end
         
+
+        %% processAcPackets
+        function [modeObservations, modeDelays] = processAcPackets(timestep, acPackets)
+            modeObservations = [];
+            modeDelays = [];
+            if numel(acPackets) ~= 0
+                ackPayloads = cell(1, numel(acPackets));
+                ackDelays = cell(1, numel(acPackets));
+                [ackPayloads{:}] = acPackets(:).payload;
+                [ackDelays{:}] = acPackets(:).packetDelay;
+                % get the observed modes from the ACK packets
+                ackedPacketTimes = cell2mat(ackPayloads);
+                modeDelays = cell2mat(ackDelays);
+                % get the time stamps of the ACK packets
+                ackTimeStamps = timestep - modeDelays;
+                
+                modeObservations = ackTimeStamps - ackedPacketTimes + 1;
+            end
+        end
+         
         %% processScPackets
         function [measurements, measDelays] = processScPackets(scPackets)
+            % Extract the measurements and corresponding delays from the
+            % data packets received from the sensor. 
+            %
+            % Parameters:
+            %   >> scPackets (Array of DataPackets, might be empty)
+            %      An array of DataPackets containing measurements taken and transmitted from the sensor.
+            %
+            % Returns:
+            %   << measurements (Matrix, might be empty)
+            %      The measurements extracted from the data packets,
+            %      column-wise arranged.
+            %      Empty matrix is returned if scPackets is empty.
+            %
+            %   << measDelays (Vector, might be empty)
+            %      A vector containing the delays of the received measurements (in timesteps), 
+            %      where the i-th element denotes the delay of the i-th measurement.
+            %      Empty matrix is returned if scPackets is empty.
+            
             measurements = [];
             measDelays = [];
             if numel(scPackets) ~= 0

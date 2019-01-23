@@ -1,12 +1,33 @@
-function [pktsOut, stats] = ncs_doLoopStep(handle, timestamp)
-    % Performs a control loop (NCS) cycle in Matlab. 
+function [pktsOut, stats] = ncs_doLoopStep(handle, timestamp, paramStruct)
+    % Perform a control loop (NCS) cycle in Matlab. 
     %
     % Parameters:
     %   >> handle (Key into ComponentMap, uint32)
     %      A handle (key into ComponentMap) which uniquely identifies a NetworkedControlSystem.
     %
     %   >> timestamp (Positive Integer)
-    %      The current simulation time (in Omnet), in pico-seconds.   
+    %      The current simulation time (in Omnet), in pico-seconds.
+    %
+    %   >> paramStruct (Struct or empty matrix)
+    %      A structure containing parameters of the NCS to be changed or newly set 
+    %      at the beginning of this control cycle.
+    %      A typical example would be an adaptation of the controller
+    %      deadband.
+    %      Supported parameters to date:
+    %      - controllerDeadband (Nonnegative scalar): the new threshold value (deadband) for the decison rule
+    %        if the controller employs a deadband control strategy; ignored, if controller is not
+    %        event-based or does not employ a deadband control strategy
+    %      - sensorMeasDelta (Nonnegative scalar): the new threshold value (delta) for the decision rule
+    %        if the sensor employs a send-on-delta strategy; 
+    %        ignored, if the sensor is not event-based
+    %      - controlSequenceLength (Positive integer): the new length of the control sequences
+    %        to be transmitted by the controller from now on;
+    %        ignored, if changing the sequence length at runtime is not
+    %        supported by the employed controller
+    %      - caDelayProbs (Nonnegative vector): the new true (or assumed) distribution of the delays in the
+    %        network between controller and actuator (i.e., for control sequences);
+    %        ignored, if adapting this distribution at runtime is not
+    %        supported by the employed controller
     %
     % Returns:
     %   << pktsOut (Cell array, column-vector like, of DataPackets)
@@ -15,23 +36,24 @@ function [pktsOut, stats] = ncs_doLoopStep(handle, timestamp)
     %      in a cell array.
     %
     %   << stats (Struct)
-    %     Struct containing statistical data gathered during the execution
-    %     of the control cycle. At least the following fields are present:
-    %     -actual_qoc (Nonnegative scalar), indicating the current Quality of Control
-    %     -actual_stagecosts (Nonnegative scalar), indicating the current
-    %     stage costs according the controller's underlying cost functional
-    %     -sc_delays (Column vector of nonnegative integers, might be empty), 
-    %     describing the delays (in time steps) the processed DataPackets sent from the sensor experienced
-    %     -ca_delays (Column vector of nonnegative integers, might be empty), 
-    %     describing the delays (in time steps) the processed DataPackets sent from the controller experienced
-    %     -ac_delays (Column vector of nonnegative integers, might be empty), 
-    %     describing the delays (in time steps) the processed ACKs sent from the actuator experienced
-    %     -sc_sent (Logical, i.e., a flag), indicating whether a
-    %     packet (i.e., a measurement) was sent out by the sensor or not
-    %     -ca_sent (Logical, i.e., a flag), indicating whether a
-    %     packet (i.e., a control sequence) was sent out by the controller or not
-    %     -ac_sent (Logical, i.e., a flag), indicating whether a
-    %     packet (i.e., an ACK) was sent out by the actuator or not
+    %      Struct containing statistical data gathered during the execution
+    %      of the control cycle. 
+    %      At least the following fields are present:
+    %      - actual_qoc (Nonnegative scalar), indicating the current Quality of Control
+    %      - actual_stagecosts (Nonnegative scalar), indicating the current
+    %        stage costs according the controller's underlying cost functional
+    %      - sc_delays (Column vector of nonnegative integers, might be empty), 
+    %        describing the delays (in time steps) the processed DataPackets sent from the sensor experienced
+    %      - ca_delays (Column vector of nonnegative integers, might be empty), 
+    %        describing the delays (in time steps) the processed DataPackets sent from the controller experienced
+    %      - ac_delays (Column vector of nonnegative integers, might be empty), 
+    %        describing the delays (in time steps) the processed ACKs sent from the actuator experienced
+    %      - sc_sent (Logical, i.e., a flag), indicating whether a
+    %        packet (i.e., a measurement) was sent out by the sensor or not
+    %      - ca_sent (Logical, i.e., a flag), indicating whether a
+    %        packet (i.e., a control sequence) was sent out by the controller or not
+    %      - ac_sent (Logical, i.e., a flag), indicating whether a
+    %        packet (i.e., an ACK) was sent out by the actuator or not
     
     %    This program is free software: you can redistribute it and/or modify
     %    it under the terms of the GNU General Public License as published by
@@ -50,6 +72,14 @@ function [pktsOut, stats] = ncs_doLoopStep(handle, timestamp)
     assert(Checks.isPosScalar(timestamp) && mod(timestamp, 1) == 0, ...
         'ncs_doLoopStep:InvalidTimestamp', ...
         '** <timestamp> expected to be positive integer **');
+    
+    if nargin < 3
+        paramStruct = struct([]);
+    else
+        assert(isempty(paramStruct) || (isstruct(paramStruct) && isscalar(paramStruct)), ...
+            'ncs_doLoopStep:InvalidParamStruct', ...
+            '** If <paramStruct> is present, it must be a single struct (might be empty, though) **'); 
+    end
     
     caPackets = [];
     scPackets = [];
@@ -92,6 +122,21 @@ function [pktsOut, stats] = ncs_doLoopStep(handle, timestamp)
         packetBuffer.clear(handle);
     end
 
+    % process the params passed additionally here (e.g., a new deadband value) 
+    if isfield(paramStruct, 'controllerDeadband') && ncs.controller.isEventBased ...
+            && isprop(ncs.controller, 'deadband')
+        ncs.controller.deadband = paramStruct.controllerDeadband;
+    end
+    if isfield(paramStruct, 'sensorMeasDelta') && ncs.sensor.isEventBased
+        ncs.sensor.measurementDelta = paramStruct.sensorMeasDelta;
+    end
+    if isfield(paramStruct, 'caDelayProbs')
+        ncs.changeControllerCaDelayProbs(paramStruct.caDelayProbs);
+    end
+    if isfield(paramStruct, 'controlSequenceLength') 
+        ncs.changeControllerSequenceLength(paramStruct.controlSequenceLength);        
+    end
+    
     [controllerActuatorPacket, sensorControllerPacket, controllerAck] ...
         = ncs.step(timestep, scPackets, caPackets, acPackets);
 
@@ -131,10 +176,10 @@ end
 function issueErrorInvalidDestinationAddress(destinationAddress, sourceAddress)
     if nargin == 1
         error('ncs_doLoopStep:InvalidDestinationAddress', ...
-            '** Unsupported destination address encountered (%d)  **', destinationAddress);
+            '** Unsupported destination address encountered (%d) **', destinationAddress);
     end
     error('ncs_doLoopStep:InvalidDestinationAddress', ...
-        '** Unsupported destination address encountered (%d)  for source address (%d) **', ...
+        '** Unsupported destination address encountered (%d) for source address (%d) **', ...
         destinationAddress, sourceAddress); 
 
 end

@@ -11,8 +11,7 @@ classdef EventBasedNcsControllerWithFilter < NcsControllerWithFilter
     %   Jörg Fischer,
     %   Optimal sequence-based control of networked linear systems,
     %   Karlsruhe series on intelligent sensor-actuator-systems, Volume 15,
-    %   KIT Scientific Publishing, 2015.
-    
+    %   KIT Scientific Publishing, 2015.    
     
     % >> This function/class is part of CoCPN-Sim
     %
@@ -24,7 +23,7 @@ classdef EventBasedNcsControllerWithFilter < NcsControllerWithFilter
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
     %                        Karlsruhe Institute of Technology (KIT), Germany
     %
-    %                        http://isas.uka.de
+    %                        https://isas.iar.kit.edu
     %
     %    This program is free software: you can redistribute it and/or modify
     %    it under the terms of the GNU General Public License as published by
@@ -46,12 +45,11 @@ classdef EventBasedNcsControllerWithFilter < NcsControllerWithFilter
     properties (Access = public)
         % deadband (for the deadband control strategy)
         deadband = EventBasedNcsControllerWithFilter.defaultDeadband;
+        eventTrigger = EventBasedControllerTriggerCriterion.Sequence;
     end
     
     properties (Access = private)
-        % previously sent controlSequence
-        lastSentControlSequence;
-        lastSentTimestep;
+        lastSentData; % struct containing timestep, sequence, state estimate, perceived QoC, stage costs
     end
     
     methods
@@ -61,6 +59,15 @@ classdef EventBasedNcsControllerWithFilter < NcsControllerWithFilter
                 '** <newDeadband> must be a nonnegative scalar **');
 
             this.deadband = newDeadband;
+        end
+        
+        function set.eventTrigger (this, newEventTrigger)
+            assert(isscalar(newEventTrigger) && isa(newEventTrigger, 'uint8') ...
+                && newEventTrigger <= EventBasedControllerTriggerCriterion.getMaxId(), ...
+                'EventBasedNcsControllerWithFilter:SetEventTrigger:InvalidTrigger', ...
+                '** <newEventTrigger> must be a EventBasedControllerTriggerCriterion **');
+            
+            this.eventTrigger = EventBasedControllerTriggerCriterion(newEventTrigger);
         end
     end
     
@@ -111,6 +118,7 @@ classdef EventBasedNcsControllerWithFilter < NcsControllerWithFilter
                 plantStateOrigin = [];
             end
             this = this@NcsControllerWithFilter(controller, filter, plantModel, measModel, defaultInput, plantStateOrigin);            
+            this.isEventBased = true;
         end
         
         %% step
@@ -168,43 +176,37 @@ classdef EventBasedNcsControllerWithFilter < NcsControllerWithFilter
             % use (previous!) true mode (theta_{k-1}) or estimated mode of augmented system
             % and use xhat_k
             inputSequence = this.computeControlInputSequence(previousMode, timestep);
-                        
+            
+            sendData.state = this.getControllerState(); % with respect to the plant coordinates
+            sendData.sequence = inputSequence;
+            sendData.timestep = timestep;
+            sendData.qoc = this.getCurrentQualityOfControl(sendData.state, timestep); % QoC, perceived by the controller
+            sendData.stageCosts = this.getCurrentStageCosts(sendData.state, ...
+                    inputSequence(:, 1), timestep); % stage costs if first element of sequence was applied 
             % finally, create the data packet, if sequence shall be send           
             % update the buffer for the filter
-            if ~isempty(inputSequence) && this.checkSendControlSequence(inputSequence, timestep)
+            if this.checkSendControlSequence(sendData)
                 dataPacket = NcsController.createControlSequenceDataPacket(timestep, inputSequence);
-                
-                this.lastSentControlSequence = inputSequence;
-                this.lastSentTimestep = timestep;
+                                
+                this.lastSentData = sendData;                
             else
                 inputSequence = repmat(this.defaultInput, 1, this.controlSequenceLength);
-                dataPacket = [];
+                dataPacket = [];               
             end
-            this.updateControlSequencesBuffer(inputSequence);
+            this.updateControlSequencesBuffer(inputSequence);           
             
             if nargout == 4
-                controllerState = this.getControllerState();
+                controllerState = sendData.state;
             end
         end
     end
     
     methods (Access = private)
         %% checkSendControlSequence
-        function sendSeq = checkSendControlSequence(this, inputSequence, timestep)
-            if isempty(this.lastSentControlSequence) ...
-                    || (timestep - this.lastSentTimestep) > this.controlSequenceLength - 1
-                sendSeq = true;
-            else
-               % extract the relevant inputs from the two sequences (which
-               % are given as matrices)
-               timeDiff = timestep - this.lastSentTimestep;
-               newU = inputSequence(:, 1:(end-timeDiff));
-               oldU = this.lastSentControlSequence(:, timeDiff+1:end);
-               
-               maxChange = max(sqrt(sum((newU-oldU).^2, 1)) ./ sqrt(sum(newU.^2, 1)));
-               % vecnorm function available with R2017b
-               sendSeq = maxChange > this.deadband;
-            end
+        function sendSeq = checkSendControlSequence(this, sendData)
+            sendSeq = isempty(this.lastSentData) ...
+                || (sendData.timestep - this.lastSentData.timestep) > this.controlSequenceLength - 1 ...
+                || this.eventTrigger.evaluateTrigger(this.lastSentData, sendData, this.deadband);            
         end
     end
 end

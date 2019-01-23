@@ -1,6 +1,7 @@
-function config = BuildInvertedPendulumConfig(massCart, massPendulum, friction, inertia, length, ...
+function config = BuildInvertedPendulumConfig(massCart, massPendulum, friction, length, ...
     samplingInterval, initialPlantState, plantNoiseCov, measNoiseCov)
-    % Function to create a config struct with parameters for a discrete-time inverted pendulum on a cart.
+    % Function to create a config struct with parameters for a discrete-time inverted pendulum 
+    % (with uniform rod, i.e., the center of mass is located at the center of the rod) on a cart.
     % For the simulation of the pendulum, the deterministic, nonlinear dynamics is used.
     % To use a linear model for the controller, the plant dynamics is linearized
     % around the unstable upward equilibrium which corresponds to the state
@@ -19,12 +20,8 @@ function config = BuildInvertedPendulumConfig(massCart, massPendulum, friction, 
     %      A positive scalar denoting the coefficient of friction for the cart (in Ns/m).
     %      If left out, 0.1 Ns/m is used as default value.
     %
-    %   >> inertia (Positive scalar, optional)
-    %      A positive scalar denoting the moment of inertia of the pendulum (in kgm²).
-    %      If left out, 0.006 kgm² is used as default value.
-    %
     %   >> length (Positive scalar, optional)
-    %      A positive scalar denoting the length to pendulum center of mass (in m).
+    %      A positive scalar denoting the length of the pendulum rod (in m).
     %      If left out, 0.3 m is used as default value.
     %
     %   >> samplingInterval (Positive scalar, optional)
@@ -68,7 +65,7 @@ function config = BuildInvertedPendulumConfig(massCart, massPendulum, friction, 
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
     %                        Karlsruhe Institute of Technology (KIT), Germany
     %
-    %                        http://isas.uka.de
+    %                        https://isas.iar.kit.edu
     %
     %    This program is free software: you can redistribute it and/or modify
     %    it under the terms of the GNU General Public License as published by
@@ -91,7 +88,6 @@ function config = BuildInvertedPendulumConfig(massCart, massPendulum, friction, 
         massCart = 0.5; % mass of cart
         massPendulum = 0.2; % mass of pendulum
         friction = 0.1; % friction of the cart
-        inertia = 0.006; % moment of inertia of the pendulum
     
         length = 0.3; % length of pendulum
         samplingInterval = 0.01; % 100Hz
@@ -109,7 +105,7 @@ function config = BuildInvertedPendulumConfig(massCart, massPendulum, friction, 
             '** Invalid number of arguments (%d). Either pass none or all. **', nargin);
     end
     g = 9.81; % gravitational force
-    
+    inertia = massPendulum * length^2 / 3; % moment of inertia of the pendulum, assuming a uniform rod (center of mass in the middle)
     denom = inertia * (massCart + massPendulum) + massPendulum * length ^ 2 * massCart;
     contSysMatrix = [0 1 0 0;
                  0  -(inertia+massPendulum*length^2)*friction/denom ((massPendulum * length)^2*g)/denom 0;
@@ -134,7 +130,7 @@ function config = BuildInvertedPendulumConfig(massCart, massPendulum, friction, 
     % we want to measure the deviation of the angle from equilibrium, but measure the angle
     % so add pi to the meas model used by the filter
     config.v_mean = [0 pi]';
-    config.plant = InvertedPendulum(massCart, massPendulum, length, inertia, friction, samplingInterval);
+    config.plant = InvertedPendulum(massCart, massPendulum, length, friction, samplingInterval);
     config.sensor = LinearMeasurementModel(config.C);
     config.sensor.setNoise(Gaussian(zeros(2, 1), config.V));
     

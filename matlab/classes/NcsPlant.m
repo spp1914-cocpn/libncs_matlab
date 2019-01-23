@@ -12,7 +12,7 @@ classdef NcsPlant < handle
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
     %                        Karlsruhe Institute of Technology (KIT), Germany
     %
-    %                        http://isas.uka.de
+    %                        https://isas.iar.kit.edu
     %
     %    This program is free software: you can redistribute it and/or modify
     %    it under the terms of the GNU General Public License as published by
@@ -121,6 +121,19 @@ classdef NcsPlant < handle
             % apply the input to proceed to the next time step
             this.plant.setSystemInput(actualInput);
             newPlantState = this.plant.simulate(plantState);
+        end
+        
+        %% changeActuatorSequenceLength
+        function changeActuatorSequenceLength(this, newSequenceLength)
+            % Change the length of the control sequences to be processed by the actuator.
+            % This operation is required if the employed controller adapts
+            % the length of transmitted control sequences at runtime.
+            %
+            % Parameters:
+            %   >> newSequenceLength (Positive integer)
+            %      The new sequence length to be used.
+            
+            this.actuator.changeControlSequenceLength(newSequenceLength);
         end
     end
     
