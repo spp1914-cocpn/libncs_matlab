@@ -65,7 +65,7 @@ function configOut = BuildControllerConfig(controllerClassName, Q, R, initialEst
         filterClassName = [];
         initialEstimate = [];
     elseif nargin == 4
-        initialEstimate = [];
+        filterClassName = [];
     end
     
     configOut.controllerClassName = controllerClassName;

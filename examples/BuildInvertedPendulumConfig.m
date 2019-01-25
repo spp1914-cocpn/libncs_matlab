@@ -100,9 +100,9 @@ function config = BuildInvertedPendulumConfig(massCart, massPendulum, friction, 
         sigmaDev = 0.001; % standard deviation of angle (deviation from equlibrium)
         % noise of the continuous-time lineraized model
         plantNoiseCov = diag([sigmaPos 0 sigmaDev 0]) .^ 2;
-    elseif nargin ~= 9
+    elseif nargin ~= 8
         error('BuildInvertedPendulumConfig:InvalidNumberOfArgs', ...
-            '** Invalid number of arguments (%d). Either pass none or all. **', nargin);
+            '** Invalid number of arguments (%d). Either pass none or all (8). **', nargin);
     end
     g = 9.81; % gravitational force
     inertia = massPendulum * length^2 / 3; % moment of inertia of the pendulum, assuming a uniform rod (center of mass in the middle)
