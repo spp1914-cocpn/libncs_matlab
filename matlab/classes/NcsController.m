@@ -7,7 +7,7 @@ classdef NcsController < handle
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2017-2018  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2017-2019  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -28,16 +28,38 @@ classdef NcsController < handle
     %    You should have received a copy of the GNU General Public License
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
     
+    properties (Constant, Access = private)
+        defaultControlErrorWindowSize = 10; % in time steps
+    end
+    
+    properties (Access = public)
+        controlErrorWindowSize = NcsController.defaultControlErrorWindowSize; % in time steps
+    end
+    
     properties (SetAccess=immutable, GetAccess = public)
         controller@SequenceBasedController;
         % origin shift: useful, in case controller uses a linearized model
         % of the plant dynamics
-        plantStateOrigin; % the origin of the plant coordinate system in controller coordinates
+        plantStateOrigin; % the origin of the plant coordinate system in controller coordinates        
     end
+    
+    properties (SetAccess = immutable, GetAccess=private)
+        doStepFun;
+        doComputeControlErrorFun;
+        canChangeCaProbsFun;
+    end
+            
+    properties (SetAccess = immutable, GetAccess = protected)
+        defaultInput; % the default input, stored as column vector
+    end    
     
     properties (SetAccess = protected, GetAccess = public)
         % indicate whether controller works event-based
-        isEventBased@logical = false;
+        isEventBased@logical = false;      
+    end
+    
+    properties (SetAccess = private, GetAccess=public)
+         statistics;
     end
     
     properties (Dependent, GetAccess = public)
@@ -48,17 +70,28 @@ classdef NcsController < handle
         function sequenceLength = get.controlSequenceLength(this)
             sequenceLength = this.controller.sequenceLength;
         end
+        
+        function set.controlErrorWindowSize(this, windowSize)
+            assert(Checks.isPosScalar(windowSize) && mod(windowSize, 1) == 0, ...
+                'NcsController:SetControlErrorWindowSize:InvalidWindowSize', ...
+                '** <windowSize> must be a positive integer **');
+            this.controlErrorWindowSize = windowSize;
+        end
     end
    
     methods (Access = public)
         %% NcsController
-        function this = NcsController(controller, plantStateOrigin)
+        function this = NcsController(controller, defaultInput, plantStateOrigin)
             % Class constructor.
             %
             % Parameters:
             %   >> controller (SequenceBasedController instance)
             %      The controller to be utilized within the corresponding
             %      NCS.
+            %
+            %   >> defaultInput (Vector)
+            %      The default input to be employed by the actuator if its
+            %      buffer runs empty.
             %
             %   >> plantStateOrigin (Vector, optional)
             %      The origin in plant state variables expressed in terms of
@@ -78,76 +111,15 @@ classdef NcsController < handle
             if Checks.isClass(this.controller, 'EventTriggeredInfiniteHorizonController')
                 this.isEventBased = true;
             end
-            if nargin == 2 && Checks.isVec(plantStateOrigin)
+            if nargin == 3 && Checks.isVec(plantStateOrigin)
                 this.plantStateOrigin = plantStateOrigin(:);
             end
-        end
-        
-        function [dataPacket, numUsedMeas, numDiscardedMeas, controllerState] ...
-                = step(this, timestep, scPackets, acPackets, plantMode)
-            % Compute a control sequence as part of a control cycle in an
-            % NCS.
-            %
-            % Parameters:
-            %   >> timestep (Positive integer)
-            %      The current time step, i.e., the integer yielding the
-            %      current simulation time (in s) when multiplied by the
-            %      loop's sampling interval.
-            %     
-            %   >> scPackets (Array of DataPackets, might be empty)
-            %      An array of DataPackets containing measurements taken and transmitted from the sensor.
-            %
-            %   >> acPackets (Array of DataPackets, might be empty)
-            %      An array of DataPackets containing ACKs returned from the actuator.
-            %   
-            %   >> plantMode (Nonnegative integer, might be empty)
-            %      The previous true plant mode (theta_{k-1}), or the empty
-            %      matrix, if not directly known to the controller.
-            %
-            % Returns:
-            %   << dataPacket (DataPacket or empty matrix)
-            %      The data packet containing new control sequence computed
-            %      by the controller, with the individual inputs column-wise arranged,
-            %      to be transmitted to the actuator.
-            %      Empty matrix is returned in case none is to be transmitted (e.g., when the controller is event-based).
-            %
-            %   << numUsedMeas (Nonnegative integer)
-            %      The number of measurements actually used for the
-            %      computation of the control sequence.
-            %
-            %   << numDiscardedMeas (Nonnegative integer)
-            %      The number of measurements which were discarded due to
-            %      a too large delay.
-            %
-            %   << controllerState (Column vector, optional)
-            %      The controller state (i.e., the controller's estimate of
-            %      the plant state), expressed in terms of the plant state
-            %      variables.
-            
-            [measurements, measDelays] = NcsController.processScPackets(scPackets);
-            [modeObservations, modeDelays] = NcsController.processAcPackets(timestep, acPackets);
-            % add the previous true mode to the mode observations, if available
-            if ~isempty(plantMode) && ~ismember(1, modeDelays)
-                modeObservations(end + 1) = plantMode;
-                modeDelays(end + 1) = 1;
-            end
-            
-            if nargout == 4
-                % retrieve state before sequence is computed
-                controllerState = this.controller.getControllerPlantState();
-                % shift controller state if required, to be expressed with
-                % regards to the plant coordinates
-                if ~isempty(this.plantStateOrigin)
-                    controllerState = controllerState + this.plantStateOrigin;
-                end
-            end
-            inputSequence = ...
-                this.reshapeInputSequence(this.controller.computeControlSequence(measurements, measDelays, modeObservations, modeDelays));
-            
-            dataPacket = NcsController.createControlSequenceDataPacket(timestep, inputSequence);
-            [numUsedMeas, numDiscardedMeas] = this.controller.getLastComputationMeasurementData();
-        end
-        
+            this.defaultInput = defaultInput(:);
+            this.doStepFun = this.constructDoStepFun();
+            this.doComputeControlErrorFun = this.constructComputeControlErrorFun();
+            this.canChangeCaProbsFun = this.constructCanChangeCaDelayProbsFun();
+        end        
+                
         %% computeCosts
         function controlCosts = computeCosts(this, plantStates, appliedInputs)
             % Compute accrued costs for the given state and input
@@ -208,45 +180,114 @@ classdef NcsController < handle
             stageCosts = this.controller.computeStageCosts(state, appliedInput, timestep);
         end
         
-        %% getCurrentQualityOfControl
-        function qoc = getCurrentQualityOfControl(this, plantState, timestep)
-            % Get the current quality of control (QoC) for the given plant
-            % true state.
+        %% getCurrentControlError
+        function [estimatedControlError, actualControlError] ...
+                = getCurrentControlError(this, timestep, plantStateHistory)
+            % Get the current control error (as perceived by the
+            % controller) at the given time step, and, optionally, the
+            % current true error based on the given true state trajectory.
             %
             % Parameters:
-            %   >> plantState (Vector)
-            %      The plant true state (with respect to the plant model) at the given time step.
-            %
             %   >> timestep (Positive integer)
             %      The current time step, i.e., the integer yielding the
             %      current simulation time (in s) when multiplied by the
             %      loop's sampling interval.
             %
+            %   >> plantStateHistory (Matrix, optional)
+            %      The plant true states (with respect to the plant model),
+            %      with the last column being the plant true state at the given time step.
+            %
             % Returns:
-            %   << currentQoC (Nonnegative scalar)
-            %      The current QoC, which is simply the norm of the current
-            %      plant true state, or, in a tracking task, the norm of
-            %      the deviation from the current reference output.
+            %   << estimatedControlError (Nonnegative scalar)
+            %      The current estimated control error, which is an integral measure: the accumulated norm of the 
+            %      controller states, or, in a tracking task,
+            %      the accumulated norm of the deviation from the reference
+            %      output or setpoint.
+            %
+            %   << actualControlError (Nonnegative scalar, optional)
+            %      The current true control error, which is an integral measure: the accumulated norm of the 
+            %      provided plant true states (with respect to the controller plant model), or, in a tracking task, the norm of
+            %      the accumulated norm of the deviation from the reference
+            %      output or setpoint.
             
-            % we compute the qoc with respect to the state
-            % variables of the controller
+            % we compute the conrol error with respect to the state
+            % variables of the controller            
+            endIdx = timestep + 1;
+            beginIdx = max(2, endIdx - this.controlErrorWindowSize + 1);
+
+            controllerStateHistory = this.statistics.controllerStates(:, beginIdx:endIdx);
             if isempty(this.plantStateOrigin)
-                state = plantState;
-            else
-                state = plantState(:) - this.plantStateOrigin;
+                controllerStates = controllerStateHistory;
+            else                
+                controllerStates = controllerStateHistory - this.plantStateOrigin;
             end
+            estimatedControlError = this.computeControlError(controllerStates, timestep);
             
-            if Checks.isClass(this.controller, 'SequenceBasedTrackingController')
-                % we track a reference
-                qoc = norm(this.controller.getDeviationFromRefForState(state, timestep)); 
-            else
-                % we track the origin
-                qoc = norm(state);
-            end
+            if nargin == 3 && nargout == 2
+                if isempty(this.plantStateOrigin)
+                    states = plantStateHistory(:, beginIdx:endIdx);                    
+                else
+                    states = plantStateHistory(:, beginIdx:endIdx) - this.plantStateOrigin;                    
+                end
+                actualControlError = this.computeControlError(states, timestep);
+            end            
         end        
     end
   
     methods (Access = public, Sealed)
+        
+        %% step
+        function dataPacket = step(this, timestep, scPackets, acPackets, plantMode)
+            % Template method to compute a control sequence as part of a control cycle in an
+            % NCS.
+            % The following functions, that can be overriden by subclasses, are called:
+            % 1. preDoStep();
+            % 2. doStep();
+            % 3. postDoStep();
+            % 4. recordStatistics();
+            %
+            % Parameters:
+            %   >> timestep (Positive integer)
+            %      The current time step, i.e., the integer yielding the
+            %      current simulation time (in s) when multiplied by the
+            %      loop's sampling interval.
+            %     
+            %   >> scPackets (Array of DataPackets, might be empty)
+            %      An array of DataPackets containing measurements taken and transmitted from the sensor.
+            %
+            %   >> acPackets (Array of DataPackets, might be empty)
+            %      An array of DataPackets containing ACKs returned from the actuator.
+            %   
+            %   >> plantMode (Nonnegative integer, might be empty)
+            %      The previous true plant mode (theta_{k-1}), or the empty
+            %      matrix, if not directly known to the controller.
+            %
+            % Returns:
+            %   << dataPacket (DataPacket or empty matrix)
+            %      The data packet containing new control sequence computed
+            %      by the controller, with the individual inputs column-wise arranged,
+            %      to be transmitted to the actuator.
+            %      Empty matrix is returned in case none is to be transmitted (e.g., when the controller is event-based).
+
+            
+            this.preDoStep(timestep);
+            [controllerState, inputSequence, numUsedMeas, numDiscardedMeas] ...
+                = this.doStep(timestep, scPackets, acPackets, plantMode);
+            dataPacket = this.postDoStep(inputSequence, controllerState, timestep);
+            
+            % update the recorded data accordingly            
+            this.recordStatistics(timestep, numUsedMeas, numDiscardedMeas, controllerState);
+        end
+        
+        %% initStatisticsRecording
+        function initStatisticsRecording(this, maxLoopSteps, dimState)
+        
+            this.statistics.numUsedMeasurements = nan(1, maxLoopSteps);
+            this.statistics.numDiscardedMeasurements = nan(1, maxLoopSteps);            
+            %
+            this.statistics.controllerStates = zeros(dimState, maxLoopSteps + 1);
+        end
+        
         %% changeSequenceLength
         function ret = changeSequenceLength(this, newSequenceLength)
             % Change the length of the control sequence used by the
@@ -297,7 +338,140 @@ classdef NcsController < handle
         end
     end
     
-    methods (Access = protected)               
+    methods (Access = protected)
+        
+        %% preDoStep
+        function preDoStep(this, timestep)
+            % Function of the step() template method to carry out additional preprocessing 
+            % prior to the computation of the control sequence.
+            % This default implementation does nothing.
+        end
+        
+        %% doStep
+        function [controllerState, inputSequence, numUsedMeas, numDiscardedMeas] ...
+                = doStep(this, timestep, scPackets, acPackets, plantMode)
+            % Main function of the step() template method, can be overriden
+            % by subclasses.
+            %
+            % Parameters:
+            %   >> timestep (Positive integer)
+            %      The current time step, i.e., the integer yielding the
+            %      current simulation time (in s) when multiplied by the
+            %      loop's sampling interval.
+            %     
+            %   >> scPackets (Array of DataPackets, might be empty)
+            %      An array of DataPackets containing measurements taken and transmitted from the sensor.
+            %
+            %   >> acPackets (Array of DataPackets, might be empty)
+            %      An array of DataPackets containing ACKs returned from the actuator.
+            %   
+            %   >> plantMode (Nonnegative integer, might be empty)
+            %      The previous true plant mode (theta_{k-1}), or the empty
+            %      matrix, if not directly known to the controller.
+            %
+            % Returns:
+            %   << controllerState (Vector)
+            %      The controller's estimate of the current plant state,
+            %      expressed with regards to the plant coordinates.
+            %
+            %   << inputSequence (Matrix, might be empty)
+            %      The computed control sequence, shaped as matrix, 
+            %      with the individual inputs now column-wise arranged.
+            %      Empty matrix is returned if no sequence was computed, e.g. in case the controller is event-based.
+            %
+            %   << numUsedMeas (Nonnegative integer)
+            %      The number of measurements processed by the controller.
+            %
+            %   << numDiscardedMeas (Nonnegative integer)
+            %      The number of measurements discarded by the controller due to their delays.            
+            
+            [measurements, measDelays] = NcsController.processScPackets(scPackets);
+            [modeObservations, modeDelays] = NcsController.processAcPackets(timestep, acPackets);
+            % add the previous true mode to the mode observations, if available
+            if ~isempty(plantMode) && ~ismember(1, modeDelays)
+                modeObservations(end + 1) = plantMode;
+                modeDelays(end + 1) = 1;
+            end
+            
+            [controllerState, inputSequence, numUsedMeas, numDiscardedMeas] ...
+                = this.doStepFun(measurements, measDelays, modeObservations, modeDelays);
+            % shift controller state if required, to be expressed with
+            % regards to the plant coordinates
+            if ~isempty(this.plantStateOrigin)
+                controllerState = controllerState + this.plantStateOrigin;
+            end
+        end
+        
+        %% postDoStep
+        function dataPacket = postDoStep(this, inputSequence, controllerState, timestep)
+            % Function of the step() template method to carry out additional postprocessing.
+            % By default, a data packet is created containing the computed
+            % control sequence.
+            %
+            % Parameters:
+            %   << inputSequence (Matrix, might be empty)  
+            %      The computed control sequence, shaped as matrix, 
+            %      with the individual inputs now column-wise arranged.
+            %      Empty matrix is returned if no sequence was computed, e.g. in case the controller is event-based.
+            %
+            %   << controllerState (Vector)
+            %      The controller's estimate of the current plant state,
+            %      expressed with regards to the plant coordinates, as
+            %      returned by the doStep() method. In this default
+            %      implementation, this parameter is ignored.
+            %
+            %   >> timestep (Positive integer)
+            %      The current time step, i.e., the integer yielding the
+            %      current simulation time (in s) when multiplied by the
+            %      loop's sampling interval.
+            %            
+            % Returns:
+            %   << dataPacket (DataPacket or empty matrix)
+            %      The data packet containing new control sequence computed
+            %      by the controller, with the individual inputs column-wise arranged,
+            %      to be transmitted to the actuator.
+            %      Empty matrix is returned in case none is to be transmitted (e.g., when the controller is event-based).
+            
+            if ~isempty(inputSequence)
+                dataPacket = NcsController.createControlSequenceDataPacket(timestep, inputSequence);
+            else
+                dataPacket = [];
+            end
+        end
+        
+        %% recordStatistics
+        function recordStatistics(this, timestep, numUsedMeas, numDiscardedMeas, controllerState)
+            % Last function of the step() template method to record statistics.
+            %
+            % Parameters:
+            %   >> timestep (Positive integer)
+            %      The current time step, i.e., the integer yielding the
+            %      current simulation time (in s) when multiplied by the
+            %      loop's sampling interval.
+            %
+            %   << numUsedMeas (Nonnegative integer)
+            %      The number of measurements processed by the controller.
+            %
+            %   << numDiscardedMeas (Nonnegative integer)
+            %      The number of measurements discarded by the controller due to their delays.
+            %
+            %   << controllerState (Vector)
+            %      The controller's estimate of the current plant state,
+            %      expressed with regards to the plant coordinates, as
+            %      returned by the doStep() method. In this default
+            %      implementation, this parameter is ignored.
+            %
+            
+            this.statistics.numUsedMeasurements(timestep) = numUsedMeas;
+            this.statistics.numDiscardedMeasurements(timestep) = numDiscardedMeas;
+            this.statistics.controllerStates(:, timestep + 1) = controllerState;
+        end
+        
+        %% computeControlError
+        function errorMeasure = computeControlError(this, states, timestep)
+            errorMeasure = this.doComputeControlErrorFun(states, timestep);
+        end
+        
         %% canChangeSequenceLength
         function ret = canChangeSequenceLength(this)
             % Determine whether the sequence length of the employed
@@ -318,19 +492,22 @@ classdef NcsController < handle
             % changed at runtime.
             % Currently, this default implementation always returns false as this
             % functionality is not yet implemented for the controllers (that don't require a filter) in use.
+            % The only exception is the IMMBasedRecedingHorizonController,
+            % for which functions returns true.
             %
             % Parameters:
             %   >> ret (Logical Scalar, i.e., a boolean)
             %      A flag indicating whether the probability distribution
             %      can be changed at runtime.
             
-            ret = false;
+            ret = this.canChangeCaProbsFun();
         end
         
         %% doChangeCaDelayProbs
         function doChangeCaDelayProbs(this, caDelayProbs)
-            error('NcsController:DoChangeCaDelayProbs:UnsupportedOperation', ...
-                '** This should not happen, intended to be overriden by subclasses. **');
+            %error('NcsController:DoChangeCaDelayProbs:UnsupportedOperation', ...
+            %    '** This should not happen, intended to be overriden by subclasses. **');
+            this.controller.changeCaDelayProbs(caDelayProbs);
         end
         
         %% reshapeInputSequence
@@ -385,6 +562,23 @@ classdef NcsController < handle
 
         %% processAcPackets
         function [modeObservations, modeDelays] = processAcPackets(timestep, acPackets)
+            % Extract the plant modes and corresponding delays from the
+            % acknowledgment packets received from the actuator. 
+            %
+            % Parameters:
+            %   >> acPackets (Array of DataPackets, might be empty)
+            %      An array of DataPackets containing acknowledgments received from the actuator.
+            %
+            % Returns:
+            %   << modeObservations (Matrix, might be empty)
+            %      The mode observations extracted from the data packets, column-wise arranged.
+            %      Empty matrix is returned if acPackets is empty.
+            %
+            %   << modeDelays (Vector, might be empty)
+            %      A vector containing the delays of the received mode observation (in timesteps), 
+            %      where the i-th element denotes the delay of the i-th mode observation.
+            %      Empty matrix is returned if acPackets is empty.
+            
             modeObservations = [];
             modeDelays = [];
             if numel(acPackets) ~= 0
@@ -432,6 +626,55 @@ classdef NcsController < handle
                 measurements = cell2mat(meas);
                 measDelays = cell2mat(delays);
             end
+        end
+    end
+    
+    methods (Access = private)
+        
+        %% constructCanChangeCaDelayProbsFun
+        function fun = constructCanChangeCaDelayProbsFun(this)
+            if Checks.isClass(this.controller, 'IMMBasedRecedingHorizonController')
+                fun = @() true;
+            else
+                fun = @() false;
+            end
+        end
+        
+        %% constructComputeControlErrorFun
+        function fun = constructComputeControlErrorFun(this)
+            % use an integral measure, i.e., a trailing sum with a fixed
+            % horizon (number of columns of states) that is considered
+            if Checks.isClass(this.controller, 'SequenceBasedTrackingController')
+                % we track a reference
+                fun = @(states, timestep) ...
+                    sum(sqrt(sum(bsxfun(@(s, t) this.controller.getDeviationFromRefForState(s, t) .^ 2, states, timestep - [size(states, 2)-1:-1:0]))));
+            else
+                % we drive the plant to the origin
+                fun = @(states, timestep) sum(sqrt(sum(states .^ 2)));
+            end       
+            
+        end
+        
+        %% constructDoStepFun
+        function fun = constructDoStepFun(this)
+            if Checks.isClass(this.controller, 'IMMBasedRecedingHorizonController')
+                fun =@fun2;
+            else
+                fun=@fun1;
+            end
+            
+            function [state, input, numUsedMeas, numDiscardedMeas] = fun1(measurements, measDelays, modeObservations, modeDelays)
+                % retrieve state before sequence is computed
+                state = this.controller.getControllerPlantState();
+                input = this.reshapeInputSequence(this.controller.computeControlSequence(measurements, measDelays, modeObservations, modeDelays));
+                [numUsedMeas, numDiscardedMeas] = this.controller.getLastComputationMeasurementData();
+            end
+            function [state, input, numUsedMeas, numDiscardedMeas] = fun2(measurements, measDelays, modeObservations, modeDelays)
+                input = this.reshapeInputSequence(this.controller.computeControlSequence(measurements, measDelays, modeObservations, modeDelays));
+                % retrieve state after sequence is computed
+                state = this.controller.getControllerPlantState();
+                [numUsedMeas, numDiscardedMeas] = this.controller.getLastComputationMeasurementData();
+            end            
         end
     end
 end

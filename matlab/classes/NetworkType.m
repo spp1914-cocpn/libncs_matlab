@@ -1,4 +1,4 @@
-classdef NetworkType
+classdef NetworkType < uint8
     % Enum to provide constants indicating what type of network is in use.
         
     % >> This function/class is part of CoCPN-Sim
@@ -27,9 +27,9 @@ classdef NetworkType
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
     
     enumeration
-        TcpLike, % ACKs are received instantaneously -> mode history up to k-1 available at time k
-        UdpLike, % ACKs are not sent at all -> true mode never available
-        UdpLikeWithAcks % ACKs are delayed and lossy as well -> subset of the mode history available at time k
+        TcpLike (1), % ACKs are received instantaneously -> mode history up to k-1 available at time k
+        UdpLike (2), % ACKs are not sent at all -> true mode never available
+        UdpLikeWithAcks (3) % ACKs are delayed and lossy as well -> subset of the mode history available at time k
     end
     
     properties
@@ -46,6 +46,13 @@ classdef NetworkType
             % we do not send ACKs back to the controller in case of
             % TCP-like or UDP-like communication
             ret = (this == NetworkType.UdpLikeWithAcks);
+        end
+    end
+    
+    methods (Access = public, Static)
+        %% getMaxIdx
+        function maxId = getMaxId()
+            maxId = 3;
         end
     end
     

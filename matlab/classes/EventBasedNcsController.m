@@ -1,17 +1,11 @@
-classdef EventBasedNcsControllerWithFilter < NcsControllerWithFilter
-    % Wrapper class for sequence-based controllers that require an external
-    % filter and support event-based data transmission in terms of a
+classdef EventBasedNcsController < NcsController
+    % Wrapper class for sequence-based controllers that support event-based data transmission in terms of a
     % deadband control strategy.
     %
     % Literature: 
     %  	Yun-Bo Zhao, Guo-Ping Liu, and David Rees,
     %   Packet-Based Deadband Control for Internet-Based Networked Control Systems,
     %   IEEE Transactions on Control Systems Technology, vol. 18, no. 5, pp. 1057-1067, 2010.
-    %
-    %   Jörg Fischer,
-    %   Optimal sequence-based control of networked linear systems,
-    %   Karlsruhe series on intelligent sensor-actuator-systems, Volume 15,
-    %   KIT Scientific Publishing, 2015.    
     
     % >> This function/class is part of CoCPN-Sim
     %
@@ -44,13 +38,14 @@ classdef EventBasedNcsControllerWithFilter < NcsControllerWithFilter
     
     properties (Access = public)
         % deadband (for the deadband control strategy)
-        deadband = EventBasedNcsControllerWithFilter.defaultDeadband;
+        deadband = EventBasedNcsController.defaultDeadband;
         eventTrigger = EventBasedControllerTriggerCriterion.Sequence;
     end
     
     properties (Access = private)
         lastSentData; % struct containing timestep, sequence, state estimate, perceived QoC, stage costs
-    end
+        bufferedControlInputSequences;
+    end 
     
     properties (SetAccess = immutable, GetAccess = private)
         canUpdateEtaState;
@@ -59,7 +54,7 @@ classdef EventBasedNcsControllerWithFilter < NcsControllerWithFilter
     methods
         function set.deadband(this, newDeadband)
             assert(Checks.isNonNegativeScalar(newDeadband), ...
-                'EventBasedNcsControllerWithFilter:SetDeadband:InvalidDeadband', ...
+                'EventBasedNcsController:SetDeadband:InvalidDeadband', ...
                 '** <newDeadband> must be a nonnegative scalar **');
 
             this.deadband = newDeadband;
@@ -68,7 +63,7 @@ classdef EventBasedNcsControllerWithFilter < NcsControllerWithFilter
         function set.eventTrigger (this, newEventTrigger)
             assert(isscalar(newEventTrigger) && isa(newEventTrigger, 'uint8') ...
                 && newEventTrigger <= EventBasedControllerTriggerCriterion.getMaxId(), ...
-                'EventBasedNcsControllerWithFilter:SetEventTrigger:InvalidTrigger', ...
+                'EventBasedNcsController:SetEventTrigger:InvalidTrigger', ...
                 '** <newEventTrigger> must be a EventBasedControllerTriggerCriterion **');
             
             this.eventTrigger = EventBasedControllerTriggerCriterion(newEventTrigger);
@@ -76,37 +71,18 @@ classdef EventBasedNcsControllerWithFilter < NcsControllerWithFilter
     end
     
     methods (Access = public)
-        %% EventBasedNcsControllerWithFilter
-        function this = EventBasedNcsControllerWithFilter(controller, filter, plantModel, measModel, defaultInput, initialCaDelayProbs, plantStateOrigin)
-             % Class constructor.
+        %% NcsController
+        function this = EventBasedNcsController(controller, defaultInput, plantStateOrigin)
+            % Class constructor.
             %
             % Parameters:
             %   >> controller (SequenceBasedController instance)
             %      The controller to be utilized within the corresponding
             %      NCS.
             %
-            %   >> filter (DelayedMeasurementsFilter instance)
-            %      The filter employed to supply the given controller with
-            %      state estimates.
-            %
-            %   >> plantModel (SystemModel instance)
-            %      The system model utilized by the filter for prediction
-            %      steps, which might be specifically tailored to the
-            %      filter.
-            %
-            %   >> measModel (LinearMeasurementModel instance)
-            %      The measurement model utilized by the filter for update
-            %      steps, which might be specifically tailored to the
-            %      filter.
-            %
             %   >> defaultInput (Vector)
             %      The default input to be employed by the actuator if its
             %      buffer runs empty.
-            %
-            %   >> initialCaDelayProbs (Nonnegative Vector)
-            %      The vector describing the delay distribution of the
-            %      CA-network initially assumed/used by the given
-            %      controller and/or filter.
             %
             %   >> plantStateOrigin (Vector, optional)
             %      The origin in plant state variables expressed in terms of
@@ -119,32 +95,28 @@ classdef EventBasedNcsControllerWithFilter < NcsControllerWithFilter
             %      If left out, no offset is assumed, i.e., the zero vector.
             %
             % Returns:
-            %   << this (EventBasedNcsControllerWithFilter)
-            %      A new EventBasedNcsControllerWithFilter instance.
-            %
+            %   << this (EventBasedNcsController)
+            %      A new EventBasedNcsController instance.
             
-            if nargin == 6
+            assert(~Checks.isClass(controller, 'EventTriggeredInfiniteHorizonController'), ...
+                'EventBasedNcsController:InvalidController', ...
+                '** <controller> must not be an EventTriggeredInfiniteHorizonController **');
+            
+            if nargin == 2
                 plantStateOrigin = [];
             end
-            this = this@NcsControllerWithFilter(controller, filter, plantModel, measModel, defaultInput, ...
-                initialCaDelayProbs, plantStateOrigin);
+            this = this@NcsController(controller, defaultInput, plantStateOrigin);
             this.isEventBased = true;
-            this.canUpdateEtaState = ismethod(this.controller, 'setEtaState');
-        end
-    end    
+            
+            this.bufferedControlInputSequences ...
+                = repmat(this.defaultInput, [1 this.controlSequenceLength this.controlSequenceLength]);
+            
+            this.canUpdateEtaState = Checks.isClass(controller, 'IMMBasedRecedingHorizonController');
+        end        
+    end
     
     methods (Access = protected)
-        %% preDoStep
-        function preDoStep(this, timestep)
-            preDoStep@NcsControllerWithFilter(this, timestep);
-            if this.canUpdateEtaState && (isempty(this.lastSentData) || this.lastSentData.timestep ~= timestep - 1)
-                % the last computed sequence was not sent to plant, so
-                % update controller's internal ete state
-                this.updateControllerEtaState();
-            end
-        end
-        
-         %% postDoStep
+        %% postDoStep
         function dataPacket = postDoStep(this, inputSequence, controllerState, timestep)
             sendData.state = controllerState; % with respect to the plant coordinates
             sendData.sequence = inputSequence;
@@ -153,46 +125,45 @@ classdef EventBasedNcsControllerWithFilter < NcsControllerWithFilter
             sendData.stageCosts = this.getCurrentStageCosts(sendData.state, ...
                     inputSequence(:, 1), timestep); % stage costs if first element of sequence was applied 
             % finally, create the data packet, if sequence shall be send           
-            % update the buffer for the filter
+            % update the control sequence buffer
             if this.checkSendControlSequence(sendData)
                 dataPacket = NcsController.createControlSequenceDataPacket(timestep, inputSequence);
-                                
-                this.lastSentData = sendData;
-                this.updateControlSequencesBuffer(inputSequence);
+                controlSequenceToBuffer = inputSequence;
+                this.lastSentData = sendData;                
             else
-                this.updateControlSequencesBuffer(repmat(this.defaultInput, 1, this.controlSequenceLength));
-                dataPacket = [];                
-            end
+                dataPacket = [];
+                % entries of sequence column-wise arranged
+                controlSequenceToBuffer = repmat(this.defaultInput, 1, this.controlSequenceLength);
+                if this.canUpdateEtaState
+                    % feedback to underlying controller that computed
+                    % sequence was actually not sent to actuator
+                    
+                    % at time k, the first sequence in the buffer is U_{k-1}
+                    % the last sequence in the buffer is U_{k-N}, where the
+                    % sequence length is N+1
+                    dimInput = numel(this.defaultInput);
+                    dimEta = this.controlSequenceLength * (this.controlSequenceLength - 1) * dimInput / 2;
+                    newEta = zeros(dimEta, 1);
+                    idx = 1;
+                    for i=1:this.controlSequenceLength - 1
+                        % index i adresses buffered sequence U_{k-i}
+                        % from the old sequence we need the inputs u_{k|k-i},u_{k+1-i|k-i}, ..., u_{k+N-i|k-i}
+                        % for i= 1: u_{k|k-1},..., u_{k+N-1|k-1} 
+                        % for i=N (sequence length -2):u_{k|k-N}
+                        inputs = this.bufferedControlInputSequences(:, i+1:this.controlSequenceLength, i);
+                        newEta(idx:idx+numel(inputs)-1) = inputs(:);
+                        idx = idx + numel(inputs);
+                    end
+                    this.controller.setEtaState(newEta, controlSequenceToBuffer(:));
+                end
+            end            
             
-            this.caDelayProbsChanged = false; % reset the flag (has been set in preDoStep)
+            this.bufferedControlInputSequences = circshift(this.bufferedControlInputSequences, 1, 3);
+            this.bufferedControlInputSequences(:,:, 1) = controlSequenceToBuffer;
         end
     end
     
     methods (Access = private)
-        
-        %% updateControllerEtaState
-        function updateControllerEtaState(this)
-            % we construct the eta state from the buffered sequences
-            % to ensure that the controller has valid information
-            dimInput = numel(this.defaultInput);
-            dimEta = this.controlSequenceLength * (this.controlSequenceLength - 1) * dimInput / 2;
-            newEta = zeros(dimEta, 1);
-            % at time k, the first sequence in the buffer is U_{k-1}
-            % the last sequence in the buffer is U_{k-N}, where the
-            % sequence length is N+1
-            idx = 1;
-            for i=1:this.controlSequenceLength - 1
-                % index i adresses buffered sequence U_{k-i}
-                % from the old sequence we need the inputs u_{k|k-i},u_{k+1-i|k-i}, ..., u_{k+N-i|k-i}
-                % for i= 1: u_{k|k-1},..., u_{k+N-1|k-1} 
-                % for i=N (sequence length -2):u_{k|k-N}
-                inputs = this.bufferedControlInputSequences(:, i+1:this.controlSequenceLength, i);
-                newEta(idx:idx+numel(inputs)-1) = inputs(:);
-                idx = idx + numel(inputs);
-            end
-            this.controller.setEtaState(newEta);
-        end
-        
         %% checkSendControlSequence
         function sendSeq = checkSendControlSequence(this, sendData)
             sendSeq = isempty(this.lastSentData) ...
@@ -200,5 +171,6 @@ classdef EventBasedNcsControllerWithFilter < NcsControllerWithFilter
                 || this.eventTrigger.evaluateTrigger(this.lastSentData, sendData, this.deadband);            
         end
     end
+    
 end
 

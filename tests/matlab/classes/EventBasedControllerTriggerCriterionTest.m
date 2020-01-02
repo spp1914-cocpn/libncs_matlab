@@ -1,11 +1,13 @@
-classdef EventBasedControllerTriggerCriterionTest < matlab.unittest.TestCase
+classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
+            'libncs_matlab/matlab', 'IncludingSubfolders', true)}) ...
+        EventBasedControllerTriggerCriterionTest < matlab.unittest.TestCase
     % Test cases for EventBasedControllerTriggerCriterion.
     
     % >> This function/class is part of CoCPN-Sim
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2018  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2018-2019  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -32,7 +34,7 @@ classdef EventBasedControllerTriggerCriterionTest < matlab.unittest.TestCase
         
         lastSentSequence;   
         lastSentTimestep;
-        lastSentQoc;
+        lastSentControlError;
         lastSentStageCosts;
         lastSentData;
         deadband;
@@ -46,28 +48,28 @@ classdef EventBasedControllerTriggerCriterionTest < matlab.unittest.TestCase
             this.deadband = 0.5;
             
             this.lastSentSequence = ones(this.dimU, this.sequenceLength);
-            this.lastSentQoc = 2;
+            this.lastSentControlError = 2;
             this.lastSentStageCosts = 4;
             this.lastSentTimestep = 1;
            
             this.lastSentData.sequence = this.lastSentSequence;
-            this.lastSentData.qoc = this.lastSentQoc;
+            this.lastSentData.error = this.lastSentControlError;
             this.lastSentData.stageCosts = this.lastSentStageCosts;
             this.lastSentData.timestep = this.lastSentTimestep;
         end
     end
     
     methods (Test)
-        %% testEvaluateTriggerQoC
-        function testEvaluateTriggerQoC(this)
-            criterionUnderTest = EventBasedControllerTriggerCriterion.QoC;
+        %% testEvaluateTriggerControlError
+        function testEvaluateTriggerControlError(this)
+            criterionUnderTest = EventBasedControllerTriggerCriterion.ControlError;
             
             % we do not send
-            sendData.qoc = this.deadband -1 + this.lastSentQoc;            
+            sendData.error = this.deadband -1 + this.lastSentControlError;            
             this.verifyFalse(criterionUnderTest.evaluateTrigger(this.lastSentData, sendData, this.deadband));
             
             % we send
-            sendData.qoc = this.deadband + this.lastSentQoc + 1;            
+            sendData.error = this.deadband + this.lastSentControlError + 1;            
             this.verifyTrue(criterionUnderTest.evaluateTrigger(this.lastSentData, sendData, this.deadband));
         end
         

@@ -1,11 +1,13 @@
-classdef ComponentMapTest < matlab.unittest.TestCase
+classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
+            'libncs_matlab/matlab', 'IncludingSubfolders', true)}) ...
+        ComponentMapTest < matlab.unittest.TestCase
     % Test cases for ComponentMap.
     
     % >> This function/class is part of CoCPN-Sim
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2017-2018  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2017-2019  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -46,7 +48,7 @@ classdef ComponentMapTest < matlab.unittest.TestCase
         %% init
         function init(this)
             this.componentName = 'TestComponent';
-            this.component =  NetworkedControlSystem(this.componentName); 
+            this.component =  DummyNcsComponent(this.componentName);
             this.component2 = this;
             
             this.componentMapUnderTest = ComponentMap.getInstance();
@@ -176,7 +178,7 @@ classdef ComponentMapTest < matlab.unittest.TestCase
             this.verifySameHandle(actualComponent, expectedComponent);
             
             % now try to obtain with type check
-            expectedType = 'NetworkedControlSystem';
+            expectedType = 'DummyNcsComponent';
             actualComponent = this.componentMapUnderTest.getComponent(index, expectedType);
             this.verifySameHandle(actualComponent, expectedComponent);
         end
@@ -214,7 +216,7 @@ classdef ComponentMapTest < matlab.unittest.TestCase
             this.verifyGreaterThan(this.componentMapUnderTest.getComponentIndex(expectedComponent), -1);
             
             % no try to test for a component that is not buffered
-            newComponent = NetworkedControlSystem(this.componentName);
+            newComponent = DummyNcsComponent(42);
             
             this.verifyFalse(this.componentMapUnderTest.containsComponent(newComponent));
             % sanity check

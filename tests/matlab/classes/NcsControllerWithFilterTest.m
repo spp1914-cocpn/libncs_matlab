@@ -1,11 +1,13 @@
-classdef NcsControllerWithFilterTest < matlab.unittest.TestCase
+classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
+            'libncs_matlab/matlab', 'IncludingSubfolders', true)}) ...
+        NcsControllerWithFilterTest < matlab.unittest.TestCase
     % Test cases for NcsControllerWithFilter.
     
     % >> This function/class is part of CoCPN-Sim
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2018  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2018-2019  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -48,6 +50,7 @@ classdef NcsControllerWithFilterTest < matlab.unittest.TestCase
         filterSensorModel;
         delayWeights;
         defaultInput;
+        initialCaDelayDistribution;
     end
     
     methods (TestMethodSetup)
@@ -75,6 +78,7 @@ classdef NcsControllerWithFilterTest < matlab.unittest.TestCase
             this.plantStateOrigin = ones(this.dimX, 1);
             this.delayWeights = ones(this.controlSeqLength + 1, 1) / (this.controlSeqLength + 1);
             this.defaultInput = 2 + zeros(this.dimU, 1);
+            this.initialCaDelayDistribution = ones(this.controlSeqLength + 2, 1) / (this.controlSeqLength + 2);
             
             this.filterSensorModel = LinearMeasurementModel(this.C);
             this.filterSensorModel.setNoise(Gaussian(zeros(this.dimY, 1), this.V));
@@ -90,7 +94,7 @@ classdef NcsControllerWithFilterTest < matlab.unittest.TestCase
         %% testNcsControllerWithFilter
         function testNcsControllerWithFilter(this)
             ncsController = NcsControllerWithFilter(this.controller, this.filter, ...
-                this.filterPlantModel, this.filterSensorModel, this.defaultInput);
+                this.filterPlantModel, this.filterSensorModel, this.defaultInput, this.initialCaDelayDistribution);
             
             this.verifySameHandle(ncsController.controller, this.controller);
             this.verifyEmpty(ncsController.plantStateOrigin);
@@ -101,7 +105,7 @@ classdef NcsControllerWithFilterTest < matlab.unittest.TestCase
             this.verifySameHandle(ncsController.measModel, this.filterSensorModel);
                         
             ncsController = NcsControllerWithFilter(this.controller, this.filter, ...
-                this.filterPlantModel, this.filterSensorModel, this.defaultInput, this.plantStateOrigin);
+                this.filterPlantModel, this.filterSensorModel, this.defaultInput, this.initialCaDelayDistribution, this.plantStateOrigin);
             
             this.verifySameHandle(ncsController.controller, this.controller);
             this.verifyEqual(ncsController.plantStateOrigin, this.plantStateOrigin);
@@ -122,7 +126,7 @@ classdef NcsControllerWithFilterTest < matlab.unittest.TestCase
             this.filter.setState(controllerState);
             
             ncsController = NcsControllerWithFilter(this.controller, this.filter, ...
-                this.filterPlantModel, this.filterSensorModel, this.defaultInput);
+                this.filterPlantModel, this.filterSensorModel, this.defaultInput, this.initialCaDelayDistribution);
                         
             acPackets = [];
             scPackets = [];
@@ -139,16 +143,19 @@ classdef NcsControllerWithFilterTest < matlab.unittest.TestCase
             this.filter.setState(controllerState);
             
             ncsController = NcsControllerWithFilter(this.controller, this.filter, ...
-                this.filterPlantModel, this.filterSensorModel, this.defaultInput);
+                this.filterPlantModel, this.filterSensorModel, this.defaultInput, this.initialCaDelayDistribution);
                         
             acPackets = [];
             scPackets = [];
             timestep = 1; % initial timestep
             previousMode = 1;
             
-            [dataPacket, numUsedMeas, numDiscardedMeas, actualControllerState] ...
-                = ncsController.step(timestep, scPackets, acPackets, previousMode);
+            dataPacket = ncsController.step(timestep, scPackets, acPackets, previousMode);
             
+            numUsedMeas = ncsController.statistics.numUsedMeasurements(timestep);
+            numDiscardedMeas = ncsController.statistics.numDiscardedMeasurements(timestep);
+            actualControllerState = ncsController.statistics.controllerStates(:, timestep + 1);
+                        
             this.verifyNotEmpty(dataPacket);
             this.verifyClass(dataPacket, ?DataPacket);
             
@@ -176,7 +183,7 @@ classdef NcsControllerWithFilterTest < matlab.unittest.TestCase
             this.filter.setState(controllerState);
             
             ncsController = NcsControllerWithFilter(this.controller, this.filter, ...
-                this.filterPlantModel, this.filterSensorModel, this.defaultInput);
+                this.filterPlantModel, this.filterSensorModel, this.defaultInput, this.initialCaDelayDistribution);
             
             % assume a measurement that is too old
             measurement = 2 + zeros(this.dimY, 1);
@@ -189,8 +196,12 @@ classdef NcsControllerWithFilterTest < matlab.unittest.TestCase
             scPackets.packetDelay = measDelay;
             previousMode = 1;
             
-            [dataPacket, numUsedMeas, numDiscardedMeas, actualControllerState] ...
-                = ncsController.step(timestep, scPackets, acPackets, previousMode);
+            dataPacket = ncsController.step(timestep, scPackets, acPackets, previousMode);
+            
+            numUsedMeas = ncsController.statistics.numUsedMeasurements(timestep);
+            numDiscardedMeas = ncsController.statistics.numDiscardedMeasurements(timestep);
+            actualControllerState = ncsController.statistics.controllerStates(:, timestep + 1);
+            
             
             this.verifyNotEmpty(dataPacket);
             this.verifyClass(dataPacket, ?DataPacket);
@@ -221,7 +232,7 @@ classdef NcsControllerWithFilterTest < matlab.unittest.TestCase
             this.filter.setState(controllerState);
             
             ncsController = NcsControllerWithFilter(this.controller, this.filter, ...
-                this.filterPlantModel, this.filterSensorModel, this.defaultInput);
+                this.filterPlantModel, this.filterSensorModel, this.defaultInput, this.initialCaDelayDistribution);
             
             % assume a measurement that is still applicable
             measurement = 2 + zeros(this.dimY, 1);
@@ -233,8 +244,12 @@ classdef NcsControllerWithFilterTest < matlab.unittest.TestCase
             scPackets = DataPacket(measurement, measTime);
             scPackets.packetDelay = measDelay;
 
-            [dataPacket, numUsedMeas, numDiscardedMeas, actualControllerState] ...
-                = ncsController.step(timestep, scPackets, acPackets, previousMode);
+            dataPacket = ncsController.step(timestep, scPackets, acPackets, previousMode);
+            
+            numUsedMeas = ncsController.statistics.numUsedMeasurements(timestep);
+            numDiscardedMeas = ncsController.statistics.numDiscardedMeasurements(timestep);
+            actualControllerState = ncsController.statistics.controllerStates(:, timestep + 1);
+            
             
             this.verifyNotEmpty(dataPacket);
             this.verifyClass(dataPacket, ?DataPacket);
@@ -263,7 +278,7 @@ classdef NcsControllerWithFilterTest < matlab.unittest.TestCase
             % with the filter in use this is not possible, although the
             % controller supports this
             ncsController = NcsControllerWithFilter(this.controller, this.filter, ...
-                this.filterPlantModel, this.filterSensorModel, this.defaultInput);
+                this.filterPlantModel, this.filterSensorModel, this.defaultInput, this.initialCaDelayDistribution);
             this.assertEqual(ncsController.controller.sequenceLength, this.controlSeqLength);           
             
             this.verifyFalse(ncsController.changeSequenceLength(newSeqLength));
@@ -278,7 +293,7 @@ classdef NcsControllerWithFilterTest < matlab.unittest.TestCase
             % (DelayedKF) does, so it should be possible to change the
             % distribution of the delays
             ncsController = NcsControllerWithFilter(this.controller, this.filter, ...
-                this.filterPlantModel, this.filterSensorModel, this.defaultInput);
+                this.filterPlantModel, this.filterSensorModel, this.defaultInput, this.initialCaDelayDistribution);
            
             % call should error in case of invalid distribution
             invalidDistribution = eye(4);
@@ -291,7 +306,7 @@ classdef NcsControllerWithFilterTest < matlab.unittest.TestCase
             % (DelayedKF) does, so it should be possible to change the
             % distribution of the delays
             ncsController = NcsControllerWithFilter(this.controller, this.filter, ...
-                this.filterPlantModel, this.filterSensorModel, this.defaultInput);
+                this.filterPlantModel, this.filterSensorModel, this.defaultInput, this.initialCaDelayDistribution);
             
             newDelayProbs = [this.delayWeights(1:end-1); this.delayWeights(end) / 2; this.delayWeights(end) / 2];            
             this.verifyTrue(ncsController.changeCaDelayProbs(newDelayProbs));
@@ -300,7 +315,7 @@ classdef NcsControllerWithFilterTest < matlab.unittest.TestCase
             newController = FiniteHorizonController(this.A, this.B, this.Q, this.R, ...
                 this.delayWeights, this.controlSeqLength, 1);
             ncsController = NcsControllerWithFilter(newController, this.filter, ...
-                this.filterPlantModel, this.filterSensorModel, this.defaultInput);
+                this.filterPlantModel, this.filterSensorModel, this.defaultInput, this.initialCaDelayDistribution);
             
             this.verifyFalse(ncsController.changeCaDelayProbs(newDelayProbs));
             

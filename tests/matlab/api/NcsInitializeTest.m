@@ -1,11 +1,13 @@
-classdef NcsInitializeTest < matlab.unittest.TestCase
+classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
+            'libncs_matlab/matlab', 'IncludingSubfolders', true)}) ...
+        NcsInitializeTest < matlab.unittest.TestCase
     % Test cases for the api function ncs_initialize.
     
     % >> This function/class is part of CoCPN-Sim
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2018  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2018-2019  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -78,7 +80,7 @@ classdef NcsInitializeTest < matlab.unittest.TestCase
             
             this.id = 'Test NCS';
             this.samplingInterval = 0.1;
-            this.A = eye(this.dimX);
+            this.A = 0.75 * eye(this.dimX);
             this.B = ones(this.dimX, this.dimU);
             this.C = [1 2 3];
             this.W = eye(this.dimX); % sys noise cov
@@ -114,6 +116,7 @@ classdef NcsInitializeTest < matlab.unittest.TestCase
             this.configStruct.controllerClassName = this.controllerClassName;
             this.configStruct.initialPlantState = this.initialPlantState;
             this.configStruct.caDelayProbs = this.caDelayProbs;
+            this.configStruct.ignoreControllerCache = false;
             
             Cache.setLocation(this.cacheLocation);
             
@@ -318,8 +321,50 @@ classdef NcsInitializeTest < matlab.unittest.TestCase
                 expectedErrId); 
         end
         
+        %% testInvalidIMMBasedRecedingHorizonController
+        function testInvalidIMMBasedRecedingHorizonController(this)
+            expectedErrId = 'ncs_initialize:InitController:IMMBasedRecedingHorizonController';
+         
+            % we do not pass an initial estimate
+            this.configStruct.controllerClassName = 'IMMBasedRecedingHorizonController';            
+            this.configStruct.scDelayProbs = this.caDelayProbs;
+            this.verifyError(@() ncs_initialize(this.maxSimTime, this.id, this.configStruct, this.matFilename), ...
+                expectedErrId); 
+        end
+        
+        %% testInvalidRecedingHorizonUdpLikeController
+        function testInvalidRecedingHorizonUdpLikeController(this)
+            expectedErrId = 'ncs_initialize:InitController:RecedingHorizonUdpLikeController';
+            
+            % we do not pass delays for the sc link
+            this.configStruct.controllerClassName = 'RecedingHorizonUdpLikeController';
+            this.configStruct.initialEstimate = Gaussian(zeros(this.dimX, 1), eye(this.dimX));
+            this.verifyError(@() ncs_initialize(this.maxSimTime, this.id, this.configStruct, this.matFilename), ...
+                expectedErrId);    
+            
+            % we do not pass an initial estimate
+            this.configStruct.controllerClassName = 'RecedingHorizonUdpLikeController';
+            this.configStruct = rmfield(this.configStruct, 'initialEstimate');
+            this.assertFalse(isfield(this.configStruct, 'initialEstimate'));
+            
+            this.configStruct.scDelayProbs = this.caDelayProbs;
+            this.verifyError(@() ncs_initialize(this.maxSimTime, this.id, this.configStruct, this.matFilename), ...
+                expectedErrId); 
+        end
+        
+        %% testNoFilterClassName
+        function testNoFilterClassName(this)
+            expectedErrId = 'ncs_initialize:FilterClassNameMissing';
+            % the chosen controller needs a filter
+            this.verifyError(@() ncs_initialize(this.maxSimTime, this.id, this.configStruct, this.matFilename), ...
+                expectedErrId);            
+        end
+        
         %% test
         function test(this)
+            this.configStruct.filterClassName = 'DelayedModeIMMF';
+            this.configStruct.initialEstimate = Gaussian(zeros(this.dimX, 1), eye(this.dimX));
+            
             ncsHandle = ncs_initialize(this.maxSimTime, this.id, this.configStruct, this.matFilename);
             
             this.verifyGreaterThan(ncsHandle, 0);
@@ -331,7 +376,7 @@ classdef NcsInitializeTest < matlab.unittest.TestCase
             this.verifyEqual(ncs.samplingInterval, this.samplingInterval);
             this.verifyEqual(ncs.name, this.id);
             
-            this.verifyClass(ncs.controller, ?NcsController);
+            this.verifyClass(ncs.controller, ?NcsControllerWithFilter);
             this.verifyClass(ncs.controller.controller, ?NominalPredictiveController);
             this.verifyEqual(ncs.controller.controller.Q, this.Q);
             this.verifyEqual(ncs.controller.controller.R, this.R);
@@ -355,12 +400,56 @@ classdef NcsInitializeTest < matlab.unittest.TestCase
             this.verifyFalse(fileInfo.isdir);
         end
         
+        %% testNoCache
+        function testNoCache(this)
+            this.configStruct.filterClassName = 'DelayedModeIMMF';
+            this.configStruct.initialEstimate = Gaussian(zeros(this.dimX, 1), eye(this.dimX));            
+            this.configStruct = rmfield(this.configStruct, 'ignoreControllerCache');
+            
+            this.assertFalse(isfield(this.configStruct, 'ignoreControllerCache'));
+            
+            ncsHandle = ncs_initialize(this.maxSimTime, this.id, this.configStruct, this.matFilename);
+            
+            this.verifyGreaterThan(ncsHandle, 0);
+            ncs = ComponentMap.getInstance().getComponent(ncsHandle);
+            this.verifyClass(ncs, ?NetworkedControlSystem);
+            
+            % check some params of the contructed NCS
+            this.verifyEqual(ncs.networkType, NetworkType.UdpLikeWithAcks);
+            this.verifyEqual(ncs.samplingInterval, this.samplingInterval);
+            this.verifyEqual(ncs.name, this.id);
+            
+            this.verifyClass(ncs.controller, ?NcsControllerWithFilter);
+            this.verifyClass(ncs.controller.controller, ?NominalPredictiveController);
+            this.verifyEqual(ncs.controller.controller.Q, this.Q);
+            this.verifyEqual(ncs.controller.controller.R, this.R);
+            this.verifyEmpty(ncs.controller.controller.setpoint);
+            this.verifyEmpty(ncs.controller.plantStateOrigin);
+            
+            this.verifyClass(ncs.sensor, ?NcsSensor);
+            
+            this.verifyClass(ncs.plant, ?NcsPlant);
+            this.verifyEqual(ncs.plant.dimState, this.dimX);
+            this.verifyEqual(ncs.plant.dimInput, this.dimU);
+            
+            this.verifyEqual(ncs.controlSequenceLength, this.controlSeqLength);
+            
+            % finally, check that the cacheinfo file was indeed not created
+            [pathStr, configFileName, ~] = fileparts(this.matFilename);
+            expectedFile = [pathStr filesep configFileName '.cacheinfo'];
+            fileInfo = dir(expectedFile);
+            this.verifyEmpty(fileInfo);            
+            this.verifyTrue(exist(expectedFile, 'file') == 0);
+        end
+        
         %% testEventBasedSensor
         function testEventBasedSensor(this)
             expectedMeasDelta = 42;
             
             this.configStruct.sensorEventBased = true;
             this.configStruct.sensorMeasDelta = expectedMeasDelta;
+            this.configStruct.filterClassName = 'DelayedModeIMMF';
+            this.configStruct.initialEstimate = Gaussian(zeros(this.dimX, 1), eye(this.dimX));
             
             ncsHandle = ncs_initialize(this.maxSimTime, this.id, this.configStruct, this.matFilename);
             
@@ -372,7 +461,7 @@ classdef NcsInitializeTest < matlab.unittest.TestCase
             this.verifyEqual(ncs.samplingInterval, this.samplingInterval);
             this.verifyEqual(ncs.name, this.id);
             
-            this.verifyClass(ncs.controller, ?NcsController);
+            this.verifyClass(ncs.controller, ?NcsControllerWithFilter);
             this.verifyClass(ncs.controller.controller, ?NominalPredictiveController);
             this.verifyEqual(ncs.controller.controller.Q, this.Q);
             this.verifyEqual(ncs.controller.controller.R, this.R);
@@ -394,6 +483,8 @@ classdef NcsInitializeTest < matlab.unittest.TestCase
             expectedMeasDelta = 10; % the default value defined in EventBasedNcsSensor
             
             this.configStruct.sensorEventBased = true;
+            this.configStruct.filterClassName = 'DelayedModeIMMF';
+            this.configStruct.initialEstimate = Gaussian(zeros(this.dimX, 1), eye(this.dimX));
             
             ncsHandle = ncs_initialize(this.maxSimTime, this.id, this.configStruct, this.matFilename);
             
@@ -439,6 +530,31 @@ classdef NcsInitializeTest < matlab.unittest.TestCase
             [actualMean, actualCov] = ncs.controller.filter.getStateMeanAndCov();
             this.verifyEqual(actualMean, expectedMean, 'AbsTol', 1e-8);
             this.verifyEqual(actualCov, expectedCov, 'AbsTol', 1e-8);            
+        end
+        
+        %% testControllerWithFilterSystemNoiseMatrix
+        function testControllerWithFilterSystemNoiseMatrix(this)
+            expectedMean = zeros(this.dimX, 1);
+            expectedSysNoiseMatrix = [1 0 0; 0 0 0; 0 0 0]; % G matrix
+            plantState = [1 1 1]';
+            timestep = 1;
+            caPackets = [];
+            
+            this.configStruct.filterClassName = 'DelayedModeIMMF';
+            this.configStruct.initialEstimate = Gaussian(expectedMean, eye(this.dimX));
+            this.configStruct.controllerEventBased = false; 
+            this.configStruct.G = expectedSysNoiseMatrix;
+            
+            ncsHandle = ncs_initialize(this.maxSimTime, this.id, this.configStruct, this.matFilename);
+            ncs = ComponentMap.getInstance().getComponent(ncsHandle);
+
+            % no inputs applied
+            [~, ~, newPlantState] = ncs.plant.step(timestep, caPackets, plantState);
+          
+            % check if the state evolved correctly; noise affects only
+            % first component
+            predState = this.A * plantState;
+            this.verifyEqual(newPlantState(2:end), predState(2:end));  
         end
         
         %% testControllerWithFilterLinearizationPoint
@@ -516,7 +632,7 @@ classdef NcsInitializeTest < matlab.unittest.TestCase
             expectedMean = ones(this.dimX, 1);
             expectedCov = 0.5 * eye(this.dimX);
             expectedControllerDeadband = 50;
-            expectedControllerEventTrigger = EventBasedControllerTriggerCriterion.QoC;
+            expectedControllerEventTrigger = EventBasedControllerTriggerCriterion.ControlError;
             expectedPlantStateOrigin = 2 * ones(this.dimX, 1);
             
             this.configStruct.filterClassName = 'DelayedModeIMMF';
@@ -553,10 +669,17 @@ classdef NcsInitializeTest < matlab.unittest.TestCase
         
         %% testControllerLinearizationPoint
         function testControllerLinearizationPoint(this)
+            import matlab.unittest.fixtures.SuppressedWarningsFixture
+            
+            this.applyFixture(...
+                SuppressedWarningsFixture('ncs_initialize:InitController:IMMBasedRecedingHorizonController:NoHorizonLength'));
+            
             expectedPlantStateOrigin = ones(this.dimX, 1);
-            
+                       
             this.configStruct.linearizationPoint = expectedPlantStateOrigin;
-            
+            this.configStruct.controllerClassName = 'IMMBasedRecedingHorizonController';
+            this.configStruct.initialEstimate = Gaussian(zeros(this.dimX, 1), eye(this.dimX));
+                        
             ncsHandle = ncs_initialize(this.maxSimTime, this.id, this.configStruct, this.matFilename);
             
             ncs = ComponentMap.getInstance().getComponent(ncsHandle);
@@ -568,12 +691,48 @@ classdef NcsInitializeTest < matlab.unittest.TestCase
             this.verifyEqual(ncs.name, this.id);
             
             this.verifyClass(ncs.controller, ?NcsController);
-            this.verifyClass(ncs.controller.controller, ?NominalPredictiveController);
-            this.verifyEqual(ncs.controller.controller.Q, this.Q);
-            this.verifyEqual(ncs.controller.controller.R, this.R);
-            this.verifyEmpty(ncs.controller.controller.setpoint);
+            this.verifyClass(ncs.controller.controller, ?IMMBasedRecedingHorizonController);            
             this.verifyNotEmpty(ncs.controller.plantStateOrigin);
             this.verifyEqual(ncs.controller.plantStateOrigin, expectedPlantStateOrigin);
+                                 
+            this.verifyEqual(ncs.controlSequenceLength, this.controlSeqLength);
+        end
+        
+        %% testControllerEventBasedLinearizationPoint
+        function testControllerEventBasedLinearizationPoint(this)
+            import matlab.unittest.fixtures.SuppressedWarningsFixture
+            
+            this.applyFixture(...
+                SuppressedWarningsFixture('ncs_initialize:InitController:IMMBasedRecedingHorizonController:NoHorizonLength'));
+            
+            this.configStruct.controllerClassName = 'IMMBasedRecedingHorizonController';
+            this.configStruct.initialEstimate = Gaussian(zeros(this.dimX, 1), eye(this.dimX));
+            
+            expectedPlantStateOrigin = ones(this.dimX, 1);
+            expectedControllerDeadband = 50;
+            expectedControllerEventTrigger = EventBasedControllerTriggerCriterion.ControlError;
+            
+            this.configStruct.linearizationPoint = expectedPlantStateOrigin;
+            this.configStruct.controllerEventBased = true;
+            this.configStruct.controllerDeadband = expectedControllerDeadband;
+            this.configStruct.controllerEventTrigger = expectedControllerEventTrigger;
+            
+            ncsHandle = ncs_initialize(this.maxSimTime, this.id, this.configStruct, this.matFilename);
+            
+            ncs = ComponentMap.getInstance().getComponent(ncsHandle);
+            this.verifyClass(ncs, ?NetworkedControlSystem);
+            
+            % check some params of the contructed NCS
+            this.verifyEqual(ncs.networkType, NetworkType.UdpLikeWithAcks);
+            this.verifyEqual(ncs.samplingInterval, this.samplingInterval);
+            this.verifyEqual(ncs.name, this.id);
+            
+            this.verifyClass(ncs.controller, ?EventBasedNcsController);
+            this.verifyClass(ncs.controller.controller, ?IMMBasedRecedingHorizonController);
+            this.verifyNotEmpty(ncs.controller.plantStateOrigin);
+            this.verifyEqual(ncs.controller.plantStateOrigin, expectedPlantStateOrigin);
+            this.verifyEqual(ncs.controller.deadband, expectedControllerDeadband);
+            this.verifyEqual(ncs.controller.eventTrigger, expectedControllerEventTrigger);
                      
             this.verifyEqual(ncs.controlSequenceLength, this.controlSeqLength);
         end

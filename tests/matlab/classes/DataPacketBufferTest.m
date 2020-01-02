@@ -1,4 +1,6 @@
-classdef DataPacketBufferTest < matlab.unittest.TestCase
+classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
+            'libncs_matlab/matlab', 'IncludingSubfolders', true)}) ...
+        DataPacketBufferTest < matlab.unittest.TestCase
     % Test cases for DataPacketBuffer.
     
     % >> This function/class is part of CoCPN-Sim

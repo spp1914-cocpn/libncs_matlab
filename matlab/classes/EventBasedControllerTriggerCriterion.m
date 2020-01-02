@@ -28,7 +28,7 @@ classdef EventBasedControllerTriggerCriterion < uint8
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
     
     enumeration
-        QoC (1), % checks only the deviation in the QoC
+        ControlError (1), % checks only the deviation in the control error
         StageCosts (2), % considers the stage costs
         Sequence (3) % checks for squared deviations in the sequences only
     end
@@ -38,7 +38,7 @@ classdef EventBasedControllerTriggerCriterion < uint8
     
     methods (Access = public)
         %% evaluateTrigger
-        function ret = evaluateTrigger(this, lastSentData, sendData, deadband)
+        function ret = evaluateTrigger(this, lastSentData, sendData, threshold)
             switch this
                 case EventBasedControllerTriggerCriterion.Sequence
                     % extract the relevant inputs from the two sequences (which
@@ -49,12 +49,12 @@ classdef EventBasedControllerTriggerCriterion < uint8
                    
                     maxChange = max(sqrt(sum((newU-oldU).^2, 1)) ./ sqrt(sum(newU.^2, 1)));
                     % vecnorm function available with R2017b
-                    ret = maxChange > deadband;
-                case EventBasedControllerTriggerCriterion.QoC
-                    ret = abs(sendData.qoc - lastSentData.qoc) > deadband;
+                    ret = maxChange > threshold;
+                case EventBasedControllerTriggerCriterion.ControlError
+                    ret = abs(sendData.error - lastSentData.error) > threshold;
                 case EventBasedControllerTriggerCriterion.StageCosts
                     % check the deviation of the stage costs
-                    ret = abs(sendData.stageCosts - lastSentData.stageCosts) > deadband;
+                    ret = abs(sendData.stageCosts - lastSentData.stageCosts) > threshold;
             end
         end
     end

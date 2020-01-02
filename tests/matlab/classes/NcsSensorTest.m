@@ -1,4 +1,6 @@
-classdef NcsSensorTest < matlab.unittest.TestCase
+classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
+            'libncs_matlab/matlab', 'IncludingSubfolders', true)}) ...
+        NcsSensorTest < matlab.unittest.TestCase
     % Test cases for NcsSensor.
     
     % >> This function/class is part of CoCPN-Sim

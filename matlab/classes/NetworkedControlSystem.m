@@ -1,12 +1,12 @@
 classdef NetworkedControlSystem < handle
     % This class represents a single networked control system, consisting
-    % of (linear) plant and sensor, an actuator and a controller.
+    % of (linear) plant and sensor, an actuator, and a controller.
     
     % >> This function/class is part of CoCPN-Sim
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2017-2018  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2017-2019  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -31,9 +31,6 @@ classdef NetworkedControlSystem < handle
         name;
         samplingInterval; % in seconds, all components are clock-synchronous
         networkType@NetworkType;
-    end
-  
-    properties (Access = public)
         sensor@NcsSensor;
         controller@NcsController;
         plant@NcsPlant;
@@ -41,10 +38,8 @@ classdef NetworkedControlSystem < handle
     
     properties (Access = private)
         plantState;
-        plantMode;
-        
-        % statistics to record in each step (struct)
-        statistics;        
+        plantMode;       
+        translator@NcsTranslator;
     end
     
     properties (Dependent, GetAccess = public)
@@ -64,11 +59,20 @@ classdef NetworkedControlSystem < handle
        
     methods (Access = public)
         %% NetworkedControlSystem
-        function this = NetworkedControlSystem(name, samplingInterval, networkType)
+        function this = NetworkedControlSystem(controller, plant, sensor, name, samplingInterval, networkType)
             % Class constructor.
             %
             % Parameters:
-            %   >> name 
+            %   >> controller (NcsController)
+            %      The controller of the NCS.
+            %
+            %   >> plant (NcsPlant)
+            %      The plant of the NCS.
+            %
+            %   >> plant (NcsSensor)
+            %      The sensor of the NCS.
+            %
+            %   >> name (optional)
             %      Name or identifier for NCS.
             %
             %   >> samplingInterval (Positive Scalar, optional)
@@ -85,25 +89,93 @@ classdef NetworkedControlSystem < handle
             %   << this (NetworkedControlSystem)
             %      A new NetworkedControlSystem instance.
             switch nargin
-                case 0
+                case 3
                     name = 'NCS';
                     samplingInterval = NetworkedControlSystem.defaultSamplingTime;
                     networkType = NetworkType.UdpLikeWithAcks;
-                case 1
+                case 4
                     samplingInterval = NetworkedControlSystem.defaultSamplingTime;
                     networkType = NetworkType.UdpLikeWithAcks;
-                case 2
+                case 5
                     assert(Checks.isPosScalar(samplingInterval), ...
                         'NetworkedControlSystem:InvalidSamplingInterval', ...
                         '** <samplingInterval> must be a positive scalar. **');
                     networkType = NetworkType.UdpLikeWithAcks;
             end
+            this.controller = controller;
+            this.plant = plant;
+            this.sensor = sensor;
             this.name = name;
             this.samplingInterval = samplingInterval;
-            this.networkType = networkType;
+            if isa(networkType, 'NetworkType')
+                this.networkType = networkType;
+            else
+                assert(isscalar(networkType) && isinteger(networkType) ...
+                        && networkType > 0 && networkType <= NetworkType.getMaxId(), ...
+                    'NetworkedControlSystem:InvalidNetworkType', ...
+                    '** <networkType> must be a NetworkType **');
+                this.networkType = NetworkType(uint8(networkType));
+            end
         end
         
-               
+        %% attachTranslator
+        function attachTranslator(this, translator)
+            this.translator = translator;
+        end
+                
+        %% evaluateRateQualityCharacteristics
+        function [rate, rateChange] = evaluateRateQualityCharacteristics(this, actualQoc, targetQoc)
+            % Get the data rate required to reach a target control performance (QoC) given an actual QoC
+            % according to the underlying communication characteristics (i.e., the model relating data rate and control performance).
+            %
+            % Parameters:
+            %   >> actualQoc (Nonnegative scalar)
+            %      The current actual QoC of the NCS.
+            %
+            %   >> targetQoc (Nonnegative scalar)
+            %      The desired QoC of the NCS.
+            %
+            % Returns:
+            %   << rate (Nonnegative scalar)
+            %      The data rate (in packets per second) required to
+            %      reach the target QoC, based on the underlying communication
+            %      characteristics. The maximum value to be returned is
+            %      1/samplingRate.
+            %
+            %   << rateChange (Nonnegative scalar, optional)
+            %      The partial derivative of the underlying communication
+            %      model with regards to the target QoC, evaluated at the
+            %      given value.
+            
+            this.checkTranslator();
+            if nargout == 1
+                rate = this.translator.getDataRateForQoc(actualQoc, targetQoc);
+            else
+                [rate, rateChange] = this.translator.getDataRateForQoc(actualQoc, targetQoc);
+            end
+        end
+        
+        %% evaluateQualityRateCharacteristics
+        function qoc = evaluateQualityRateCharacteristics(this, actualQoc, targetRate)
+            % Get the control performance (QoC) that can be achieved, given an actual QoC and a desired data rate,
+            % according to the underlying communication characteristics (i.e., the model relating data rate and control performance).
+            %
+            % Parameters:
+            %   >> actualQoc (Nonnegative scalar)
+            %      The current actual QoC of the NCS.
+            %
+            %   >> targetRate (Nonnegative scalar)
+            %      The desired data rate (in packets per second).
+            %
+            % Returns:
+            %   << qoc (Nonnegative scalar)
+            %      The QoC that can be achieved given the values of actual QoC and desired data rate,
+            %      computed based on the underlying communication characteristics of the NCS.
+             
+            this.checkTranslator();
+            qoc = this.translator.getQocForDataRate(actualQoc, targetRate);
+        end
+        
         %% initPlant
         function initPlant(this, plantState)
             % Set the initial plant state.
@@ -115,8 +187,7 @@ classdef NetworkedControlSystem < handle
             %      If a distribution is passed, the initial state is
             %      randomly drawn according to the given probability law.
             %
-            this.checkPlant();
-            this.checkController();
+            
             if isa(plantState, 'Distribution')
                 state = plantState.drawRndSamples(1);
             else
@@ -145,25 +216,13 @@ classdef NetworkedControlSystem < handle
             %   >> maxLoopSteps (Positive integer)
             %      The maximum number of simulation time steps.
             %
-            this.checkPlant();
             
             assert(Checks.isPosScalar(maxLoopSteps) && mod(maxLoopSteps, 1) == 0, ...
                 'NetworkedControlSystem:InitStatisticsRecording', ...
                 '** Cannot init recording of statistics: <maxLoopSteps> must be a positive integer **');
-
-            this.statistics.trueStates = nan(this.plant.dimState, maxLoopSteps + 1);
-            this.statistics.trueModes = nan(1, maxLoopSteps + 1);
-            this.statistics.appliedInputs = nan(this.plant.dimInput, maxLoopSteps);
-            this.statistics.numUsedMeasurements = nan(1, maxLoopSteps);
-            this.statistics.numDiscardedMeasurements = nan(1, maxLoopSteps);
-            this.statistics.numDiscardedControlSequences = nan(1, maxLoopSteps);
-            %
-            this.statistics.controllerStates = zeros(this.plant.dimState, maxLoopSteps + 1);
             
-            % set the initial values (at timestep k=0)
-            this.statistics.trueStates(:, 1) = this.plantState;
-            %[this.statistics.estimates(:, 1), this.statistics.covariances(:, :, 1)] = this.filter.getPointEstimate();
-            this.statistics.trueModes(1) = this.plantMode;
+            this.controller.initStatisticsRecording(maxLoopSteps, this.plant.dimState);
+            this.plant.initStatisticsRecording(maxLoopSteps, this.plantState, this.plantMode);
         end
         
         %% getStatistics
@@ -174,7 +233,17 @@ classdef NetworkedControlSystem < handle
             %   << statistics (Struct)
             %      The statistical data.
             %
-            statistics = this.statistics;
+            
+            statistics = this.plant.statistics;
+            if ~isempty(statistics)
+                fields = fieldnames(this.controller.statistics);
+                for i=1:length(fields)
+                    f = fields{i};
+                    if ~isfield(statistics, f)
+                        statistics.(f) = this.controller.statistics.(f);
+                    end   
+                end 
+            end
         end
         
         %% getStageCosts
@@ -192,21 +261,19 @@ classdef NetworkedControlSystem < handle
             %   << stageCosts (Nonnegative scalar)
             %      The current stage costs according to the controller's underlying cost functional.
             
-            this.checkPlant();
-            
             if isempty(this.plantState)
                 % happens only if plant was not (yet) initialized
                 currentStageCosts = 0;
             else
                 % use stored x_k and u_k
-                currentStageCosts = this.controller.getCurrentStageCosts(this.statistics.trueStates(:, timestep + 1), ...
-                    this.statistics.appliedInputs(:, timestep), timestep);
+                currentStageCosts = this.controller.getCurrentStageCosts(this.plant.statistics.trueStates(:, timestep + 1), ...
+                    this.plant.statistics.appliedInputs(:, timestep), timestep);
             end
         end
         
         %% getQualityOfControl
-        function currentQoC = getQualityOfControl(this, timestep)
-            % Get the current quality of control (QoC).
+        function [actualQoc, estimatedQoc] = getQualityOfControl(this, timestep)
+            % Get the current quality of control (QoC), which is an application specific measure of the control performance.
             %
             % Parameters:
             %   >> timestep (Positive integer)
@@ -215,19 +282,78 @@ classdef NetworkedControlSystem < handle
             %      loop's sampling interval.
             %
             % Returns:
-            %   << currentQoC (Nonnegative scalar)
-            %      The current QoC, which is simply the norm of the current
-            %      plant true state (with respect to the controller plant model), or, in a tracking task, the norm of
-            %      the deviation from the current reference output.
-                       
-            % currently, simply express QoC in terms of norm of state
-            % hence, a small value is desired
-            this.checkPlant();
-            if isempty(this.plantState)
-                currentQoC = 0;
-            else
-                currentQoC = this.controller.getCurrentQualityOfControl(this.plantState, timestep);
+            %   << actualQoc (Nonnegative scalar)
+            %      The current quality of control, computed based on the
+            %      control error using an application specific mapping.
+            %      In general, the returned value is nonnegative and such
+            %      that a large value corresponds to a high control performance.
+            %
+            %   << estimatedQoc (Nonnegative scalar)
+            %      The current quality of control, as estimated/perceived by the controller, computed based on the
+            %      estimated/perceived control error using an application specific mapping.
+            %      In general, the returned value is nonnegative and such
+            %      that large a value corresponds to a high control performance.
+            
+            if isempty(this.plantState) || isempty(this.translator)
+                actualQoc = 0;
+                estimatedQoc = 0;
+            else           
+                [estimatedError, actualError] ...
+                    = this.controller.getCurrentControlError(timestep, this.plant.statistics.trueStates(:, 1:timestep+1));
+                % qoc is in unit interval [0,1]
+                actualQoc = this.translator.translateControlError(actualError);
+                estimatedQoc = this.translator.translateControlError(estimatedError);
             end
+        end
+        
+        %% getControlError
+        function [actualError, estimatedError] = getControlError(this, timestep)
+            % Get the current control error.
+            %
+            % Parameters:
+            %   >> timestep (Positive integer)
+            %      The current time step, i.e., the integer yielding the
+            %      current simulation time (in s) when multiplied by the
+            %      loop's sampling interval.
+            %
+            % Returns:
+            %   << actualError (Nonnegative scalar)
+            %      The current control error, which is an integral measure: the accumulated norm of the 
+            %      plant true states at times k, k-1, ..., k-9, (with respect to the controller plant model), or, in a tracking task, the norm of
+            %      the accumulated norm of the deviation from the reference
+            %      output or setpoint at times k, k-1, ..., k-9.
+            %
+            %   << estimatedError (Nonnegative scalar)
+            %      The current control error, which is an integral measure, as estimated/perceived by the controller: the accumulated norm of the 
+            %      plant states as estimated by the controller at times k, k-1, ..., k-9, (with respect to the controller plant model), or, in a tracking task, the norm of
+            %      the accumulated norm of the deviation from the reference
+            %      output or setpoint at times k, k-1, ..., k-9.
+                       
+            if isempty(this.plantState)
+                actualError = 0;
+                estimatedError = 0;
+            else           
+                [estimatedError, actualError] ...
+                    = this.controller.getCurrentControlError(timestep, this.plant.statistics.trueStates(:, 1:timestep+1));
+            end
+        end        
+        
+        %% isPlantStateAdmissible
+        function admissible = isPlantStateAdmissible(this, timestep)
+            % Get whether the current plant state is admissible (e.g., does not violate constraints).
+            %
+            % Parameters:
+            %   >> timestep (Positive integer)
+            %      The current time step, i.e., the integer yielding the
+            %      current simulation time (in s) when multiplied by the
+            %      loop's sampling interval.
+            %
+            % Returns:
+            %   << admissible (Logical scalar i.e., a flag)
+            %      True in case the current plant state is admissible,
+            %      false otherwise.
+                       
+            admissible = this.plant.isStateAdmissible(this.plant.statistics.trueStates(:, timestep+1));
         end
         
         %% computeTotalControlCosts
@@ -238,10 +364,8 @@ classdef NetworkedControlSystem < handle
             % Returns:
             %   << costs (Nonnegative scalar)
             %      The accrued costs according to the cost functional of the employed controller.
-            
-            this.checkController();
-            
-            costs = this.controller.computeCosts(this.statistics.trueStates, this.statistics.appliedInputs);
+                        
+            costs = this.controller.computeCosts(this.plant.statistics.trueStates, this.plant.statistics.appliedInputs);
         end
         
         %% step
@@ -284,10 +408,6 @@ classdef NetworkedControlSystem < handle
             %      The ACK for the DataPacket within the given caPackets that has
             %      become active. An empty matrix is returned in case none
             %      became active.
-            
-            this.checkPlant();
-            this.checkController();
-            this.checkSensor();
 
             % take a measurement y_k
             sensorControllerPacket = this.sensor.step(timestep, this.plantState);
@@ -299,27 +419,14 @@ classdef NetworkedControlSystem < handle
                  previousMode = this.plantMode;
             end
             
-            [controllerActuatorPacket, numUsedMeas, numDiscardedMeas, controllerState] ...
-                = this.controller.step(timestep, scPackets, acPackets, previousMode);
-       
-            % update the recorded data accordingly
-            this.statistics.controllerStates(:, timestep + 1) = controllerState;
-            this.statistics.numUsedMeasurements(timestep) = numUsedMeas;
-            this.statistics.numDiscardedMeasurements(timestep) = numDiscardedMeas;
+            controllerActuatorPacket = this.controller.step(timestep, scPackets, acPackets, previousMode);         
             
-            [controllerAck, numDiscardedSeq, actualInput, this.plantMode, newPlantState] ...
+            [controllerAck, this.plantMode, newPlantState] ...
                 = this.plant.step(timestep, caPackets, this.plantState);
              
             if ~this.networkType.sendOutAck()
                 controllerAck = [];
-            end
-            
-            % record the number of discarded control packets            
-            this.statistics.numDiscardedControlSequences(timestep) = numDiscardedSeq;
-            % record the data about true input and state
-            this.statistics.appliedInputs(:, timestep) = actualInput; % this input was applied at time k (u_k)
-            this.statistics.trueModes(timestep + 1) = this.plantMode; % the mode theta_k
-            this.statistics.trueStates(:, timestep + 1) = this.plantState; % store x_k
+            end     
                                     
             this.plantState = newPlantState;
         end
@@ -339,10 +446,7 @@ classdef NetworkedControlSystem < handle
             %      A flag indicating whether the sequence length of the
             %      employed controller was changed. 
             %      False is returned in case the controller does not support this.
-            
-            this.checkController();
-            this.checkPlant();
-           
+                      
             success = this.controller.changeSequenceLength(newSequenceLength);
             if success
                 % requires that the actuator also changes its sequence
@@ -353,7 +457,7 @@ classdef NetworkedControlSystem < handle
         
         %% changeControllerCaDelayProbs
         function success = changeControllerCaDelayProbs(this, newCaDelayProbs)
-            % Change thethe probability distribution of the delays in the
+            % Change the probability distribution of the delays in the
             % controller-actuator link assumed by the controller in the NCS. 
             % This operation does nothing if this is not supported by the controller.
             %
@@ -366,34 +470,24 @@ classdef NetworkedControlSystem < handle
             %      A flag indicating whether the probability distribution
             %      was changed.
             %      False is returned in case the controller does not support this.
-            
-            this.checkController();
-            
+                        
             success = this.controller.changeCaDelayProbs(newCaDelayProbs);
         end
     end
     
-    methods(Access = private)
-                
-        %% checkController
-        function checkController(this)
-            assert(~isempty(this.controller), ...
-                'NetworkedControlSystem:CheckController', ...
-                '** Controller has not been specified **');
-        end
-                     
-        %% checkPlant
-        function checkPlant(this)
-            assert(~isempty(this.plant), ...
-                'NetworkedControlSystem:CheckPlant', ...
-                '** Plant has not been specified **');
-        end
-        
+    methods(Access = private)        
         %% checkSensor
         function checkSensor(this)
             assert(~isempty(this.sensor), ...
                 'NetworkedControlSystem:CheckSensor', ...
                 '** Sensor has not been specified **');
+        end
+        
+        %% checkTranslator
+        function checkTranslator(this)
+            assert(~isempty(this.translator), ...
+                'NetworkedControlSystem:CheckTranslator', ...
+                '** CoCPN-Translator has not been specified **');
         end
     end
 end

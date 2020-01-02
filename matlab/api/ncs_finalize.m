@@ -39,7 +39,7 @@ function [costs, stats] = ncs_finalize(ncsHandle)
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
     
     ncs = GetNcsByHandle(ncsHandle);
-    
+
     ncsStats = ncs.getStatistics();
     costs = ncs.computeTotalControlCosts();
     stats.numUsedMeasurements = ncsStats.numUsedMeasurements;
@@ -47,8 +47,8 @@ function [costs, stats] = ncs_finalize(ncsHandle)
     stats.trueStates = ncsStats.trueStates;
     stats.controllerStates = ncsStats.controllerStates;
     stats.appliedInputs = ncsStats.appliedInputs;
-    stats.numDiscardedControlSequences = ncsStats.numDiscardedControlSequences;
-    
+    stats.numDiscardedControlSequences = ncsStats.numDiscardedControlSequences;        
+   
     ComponentMap.getInstance().removeComponentByIndex(ncsHandle);
 end
 

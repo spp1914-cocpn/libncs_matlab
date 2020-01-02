@@ -1,4 +1,6 @@
-classdef NcsPktGetIdTest < matlab.unittest.TestCase
+classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
+            'libncs_matlab/matlab', 'IncludingSubfolders', true)}) ...
+        NcsPktGetIdTest < matlab.unittest.TestCase
     % Test cases for the api function ncs_pktGetId.
     
     % >> This function/class is part of CoCPN-Sim

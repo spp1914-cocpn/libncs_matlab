@@ -1,4 +1,6 @@
-classdef CacheTest < matlab.unittest.TestCase
+classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
+            'libncs_matlab/matlab', 'IncludingSubfolders', true)}) ...
+        CacheTest < matlab.unittest.TestCase
     % Test cases for Cache.
     
     % >> This function/class is part of CoCPN-Sim

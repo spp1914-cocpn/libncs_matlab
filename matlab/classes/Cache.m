@@ -10,7 +10,7 @@ classdef Cache < handle
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2017-2018  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2017-2019  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -63,15 +63,24 @@ classdef Cache < handle
             end 
         end
         
-        function lookupInfo = insertInternal(this, ncsComponent, filename) %#ok
+        function lookupInfo = insertInternal(this, ncsComponent, filename) 
             this.ensureExistsInternal();
             filename = [this.cacheFolder '/' filename];
             
             save(filename, 'ncsComponent');
-            attributes = dir(filename);
-            lookupInfo.name = attributes.name;
-            lookupInfo.date = attributes.datenum;
-            lookupInfo.size = attributes.bytes;
+            % ensure that file was saved
+            if exist(filename, 'file') == 2
+                attributes = dir(filename);
+                lookupInfo.name = attributes.name;
+                lookupInfo.date = attributes.datenum;
+                lookupInfo.size = attributes.bytes;
+            else
+                % somehow save was not successful
+                warning('Cache:Insert:SaveNotSuccessful', ...
+                    '** Could not save %s to file %s, proceeding without caching **', ...
+                    class(ncsComponent), filename);
+                lookupInfo = []; 
+            end
         end
         
         function ncsComponent = lookupInternal(this, name, date, size)
@@ -81,8 +90,18 @@ classdef Cache < handle
                 attributes = dir(filename);
 
                 if attributes.datenum == date && size == attributes.bytes
-                    data = load(filename);
-                    ncsComponent = data.ncsComponent;
+                    data = [];
+                    try
+                        data = load(filename);
+                    catch ex
+                        % somehow something went wrong here
+                        warning('Cache:Lookup:LookupNotSuccessful', ...
+                            '** Could not load cached instance: %s\nProceeding without using cached instance **', ...
+                            getReport(ex));
+                    end                    
+                    if isfield(data, 'ncsComponent')
+                        ncsComponent = data.ncsComponent;
+                    end
                 end
             end
         end

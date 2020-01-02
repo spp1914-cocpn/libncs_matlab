@@ -1,11 +1,13 @@
-classdef NcsFinalizeTest < matlab.unittest.TestCase
+classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
+            'libncs_matlab/matlab', 'IncludingSubfolders', true)}) ...
+        NcsFinalizeTest < matlab.unittest.TestCase
     % Test cases for the api function ncs_finalize.
     
     % >> This function/class is part of CoCPN-Sim
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2018  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2018-2019  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -79,7 +81,7 @@ classdef NcsFinalizeTest < matlab.unittest.TestCase
             this.dimU = 2;
             this.dimY = 1;
             
-            this.A = eye(this.dimX);
+            this.A = 0.75 * eye(this.dimX);
             this.B = ones(this.dimX, this.dimU);
             this.C = [1 2 3];
             this.W = eye(this.dimX); % sys noise cov
@@ -93,19 +95,25 @@ classdef NcsFinalizeTest < matlab.unittest.TestCase
                        
             this.controller = NominalPredictiveController(this.A, this.B, this.Q, this.R, this.controlSeqLength);
             this.filter = DelayedKF(this.maxMeasDelay);
-            this.filter.setStateMeanAndCov(this.zeroPlantState, 0.5 * eye (this.dimX));
+            this.filter.setStateMeanAndCov(this.zeroPlantState, 0.5 * eye (this.dimX));            
             
-            this.ncs = NetworkedControlSystem('NCS', this.tickerInterval, NetworkType.TcpLike);
-            this.ncs.plant = NcsPlant(LinearPlant(this.A, this.B, this.W), ...
+            ncsPlant = NcsPlant(LinearPlant(this.A, this.B, this.W), ...
                 BufferingActuator(this.controlSeqLength, this.maxMeasDelay, zeros(this.dimU, 1)));
-            this.ncs.controller = NcsControllerWithFilter(this.controller, this.filter, ...
+            ncsController = NcsControllerWithFilter(this.controller, this.filter, ...
                  DelayedKFSystemModel(this.A, this.B, Gaussian(zeros(this.dimX, 1), this.W), ...
                 this.controlSeqLength + 1, this.maxMeasDelay, [1/3 1/3 1/3]), ...
-                this.sensor, zeros(this.dimU, 1));
-            this.ncs.sensor = NcsSensor(this.sensor);
+                this.sensor, zeros(this.dimU, 1), [1/4 1/4 1/4 1/4 1/4]);
+            ncsSensor = NcsSensor(this.sensor);
+            
+            this.ncs = NetworkedControlSystem(ncsController, ncsPlant, ncsSensor, ...
+                'NCS', this.tickerInterval, NetworkType.TcpLike);
             this.ncs.initPlant(this.zeroPlantState);
             
             this.ncs.initStatisticsRecording(this.maxLoopSteps);
+            % setup the translator
+            qocRateCurve = cfit(fittype('a/x'), 1);
+            controlErrorQocCurve = cfit(fittype('a*x^3'), 1.5);            
+            this.ncs.attachTranslator(NcsTranslator(qocRateCurve, controlErrorQocCurve, 1 / this.tickerInterval));            
             
             this.ncsHandle = this.componentMap.addComponent(this.ncs);
             

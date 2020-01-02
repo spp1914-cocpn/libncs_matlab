@@ -1,4 +1,4 @@
-function [pktsOut, stats] = ncs_doLoopStep(handle, timestamp, paramStruct)
+function [pktsOut, qocOut, stats] = ncs_doLoopStep(handle, timestamp, paramStruct)
     % Perform a control loop (NCS) cycle in Matlab. 
     %
     % Parameters:
@@ -35,13 +35,23 @@ function [pktsOut, stats] = ncs_doLoopStep(handle, timestamp, paramStruct)
     %      sent (e.g., measurements, control sequence), row-wise arranged
     %      in a cell array.
     %
+    %   << qocOut (Nonnegative scalar)
+    %      The current Quality of Control (QoC), as perceived by the
+    %      controller, which is reported to the communication system an
+    %      used for congestion control computations.
+    %
     %   << stats (Struct)
     %      Struct containing statistical data gathered during the execution
     %      of the control cycle. 
     %      At least the following fields are present:
-    %      - actual_qoc (Nonnegative scalar), indicating the current Quality of Control
+    %      - actual_control_error (Nonnegative scalar), indicating the
+    %        current true value of the control error measure
+    %      - estimated_control_error (Nonnegative scalar), indicating the value of the error measure as perceived/estimated by the controller
     %      - actual_stagecosts (Nonnegative scalar), indicating the current
     %        stage costs according the controller's underlying cost functional
+    %      - plant_state_admissible (Logical, i.e., a flag), indicating
+    %        whether the current true plant state is admissible (e.g., does
+    %        not violate any constraints)
     %      - sc_delays (Column vector of nonnegative integers, might be empty), 
     %        describing the delays (in time steps) the processed DataPackets sent from the sensor experienced
     %      - ca_delays (Column vector of nonnegative integers, might be empty), 
@@ -122,11 +132,7 @@ function [pktsOut, stats] = ncs_doLoopStep(handle, timestamp, paramStruct)
         packetBuffer.clear(handle);
     end
 
-    % process the params passed additionally here (e.g., a new deadband value) 
-    if isfield(paramStruct, 'controllerDeadband') && ncs.controller.isEventBased ...
-            && isprop(ncs.controller, 'deadband')
-        ncs.controller.deadband = paramStruct.controllerDeadband;
-    end
+    % process the params passed additionally here
     if isfield(paramStruct, 'sensorMeasDelta') && ncs.sensor.isEventBased
         ncs.sensor.measurementDelta = paramStruct.sensorMeasDelta;
     end
@@ -134,16 +140,20 @@ function [pktsOut, stats] = ncs_doLoopStep(handle, timestamp, paramStruct)
         ncs.changeControllerCaDelayProbs(paramStruct.caDelayProbs);
     end
     if isfield(paramStruct, 'controlSequenceLength') 
-        ncs.changeControllerSequenceLength(paramStruct.controlSequenceLength);        
+        ncs.changeControllerSequenceLength(double(paramStruct.controlSequenceLength));
     end
     
     [controllerActuatorPacket, sensorControllerPacket, controllerAck] ...
         = ncs.step(timestep, scPackets, caPackets, acPackets);
 
     pktsOut = constructPacketsToSend(controllerActuatorPacket, sensorControllerPacket, controllerAck);
-    
-    stats.actual_qoc = ncs.getQualityOfControl(timestep);
+    % get the QoC, as perceived by the controller, to be used by the
+    % congestion control
+    [~, qocOut] = ncs.getQualityOfControl(timestep);
+    % also, forward some gathered data
+    [stats.actual_control_error, stats.estimated_control_error] = ncs.getControlError(timestep);
     stats.actual_stagecosts = ncs.getStageCosts(timestep);
+    stats.plant_state_admissible = ncs.isPlantStateAdmissible(timestep);
     % determine if sensor and/or controller do not send this time
     % determine if actuator sent out an ACK
     stats.sc_sent = ~isempty(sensorControllerPacket);
@@ -157,7 +167,7 @@ end
 
 %% convertToTimeStep
 function timestep = convertToTimeStep(ncs, timestamp)
-    timestep = timestamp / ConvertToPicoseconds(ncs.samplingInterval);
+    timestep = double(timestamp / ConvertToPicoseconds(ncs.samplingInterval));
 end
 
 %% constructPacketsToSend

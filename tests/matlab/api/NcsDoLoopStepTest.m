@@ -1,11 +1,13 @@
-classdef NcsDoLoopStepTest < matlab.unittest.TestCase
+classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
+            'libncs_matlab/matlab', 'IncludingSubfolders', true)}) ...
+        NcsDoLoopStepTest < matlab.unittest.TestCase
     % Test cases for the api function ncs_doLoopStep.
     
     % >> This function/class is part of CoCPN-Sim
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2018  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2018-2019  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -103,7 +105,7 @@ classdef NcsDoLoopStepTest < matlab.unittest.TestCase
             this.caPacket.sourceAddress = 2; % from controller
             this.caPacket.destinationAddress = 1; % to actuator
             
-            this.A = eye(this.dimX);
+            this.A = 0.75 * eye(this.dimX);
             this.B = ones(this.dimX, this.dimU);
             this.C = [1 2 3];
             this.W = eye(this.dimX); % sys noise cov
@@ -118,18 +120,21 @@ classdef NcsDoLoopStepTest < matlab.unittest.TestCase
             this.controller = NominalPredictiveController(this.A, this.B, this.Q, this.R, this.controlSeqLength);
             this.filter = DelayedKF(this.maxMeasDelay);
             this.filter.setStateMeanAndCov(this.zeroPlantState, 0.5 * eye (this.dimX));
-            
-            this.ncs = NetworkedControlSystem('NCS', this.tickerInterval, NetworkType.TcpLike);
-            this.ncs.plant = NcsPlant(LinearPlant(this.A, this.B, this.W), ...
-                BufferingActuator(this.controlSeqLength, this.maxMeasDelay, zeros(this.dimU, 1)));
-            this.ncs.controller = NcsControllerWithFilter(this.controller, this.filter, ...
-                 DelayedKFSystemModel(this.A, this.B, Gaussian(zeros(this.dimX, 1), this.W), ...
-                this.controlSeqLength + 1, this.maxMeasDelay, [1/3 1/3 1/3]), ...
-                this.sensor, zeros(this.dimU, 1));
-            this.ncs.sensor = NcsSensor(this.sensor);
+                        
+            this.ncs = NetworkedControlSystem(NcsControllerWithFilter(this.controller, this.filter, ...
+                    DelayedKFSystemModel(this.A, this.B, Gaussian(zeros(this.dimX, 1), this.W), ...
+                    this.controlSeqLength + 1, this.maxMeasDelay, [1/3 1/3 1/3]), ...
+                    this.sensor, zeros(this.dimU, 1), [1/4 1/4 1/4 1/4]'), ...
+                NcsPlant(LinearPlant(this.A, this.B, this.W), ...
+                    BufferingActuator(this.controlSeqLength, this.maxMeasDelay, zeros(this.dimU, 1))), ...
+                NcsSensor(this.sensor), 'NCS', this.tickerInterval, NetworkType.TcpLike);
             this.ncs.initPlant(this.zeroPlantState);
             
             this.ncs.initStatisticsRecording(this.maxLoopSteps);
+            
+            % setup the translator
+            translator = NcsTranslator(cfit(fittype('a/x'), 1), cfit(fittype('a/x'), 10), 1/ this.tickerInterval);
+            this.ncs.attachTranslator(translator);
             
             this.ncsHandle = this.componentMap.addComponent(this.ncs);
             % also, receive the packets
@@ -228,20 +233,33 @@ classdef NcsDoLoopStepTest < matlab.unittest.TestCase
             this.assertNumElements(this.packetBuffer.getDataPackets(this.ncsHandle), 2);
             
             import matlab.unittest.constraints.IsScalar
+            import matlab.unittest.constraints.IsGreaterThanOrEqualTo
+            import matlab.unittest.constraints.IsLessThanOrEqualTo
+            import matlab.unittest.constraints.IsOfClass
             
             timestep = (this.timestamp + 1) * 1e12; % in pico-seconds
-            [pktsOut, stats] = ncs_doLoopStep(this.ncsHandle, timestep);
+            [pktsOut, qocOut, stats] = ncs_doLoopStep(this.ncsHandle, timestep);
+            
+            % check that qoc is nonnegative scalar
+            this.verifyThat(qocOut, IsScalar);
+            this.verifyThat(qocOut, IsGreaterThanOrEqualTo(0));
+            this.verifyThat(qocOut, IsLessThanOrEqualTo(1));
             
             % check if stats are as indicated
             this.verifyTrue(isstruct(stats));
             
-            this.verifyTrue(isfield(stats, 'actual_qoc'));
-            this.verifyThat(stats.actual_qoc, IsScalar);
-            this.verifyGreaterThanOrEqual(stats.actual_qoc, 0);
-            
+            this.verifyTrue(isfield(stats, 'actual_control_error'));
+            this.verifyTrue(isfield(stats, 'estimated_control_error'));
+            this.verifyThat(stats.estimated_control_error, IsGreaterThanOrEqualTo(0));
+                        
             this.verifyTrue(isfield(stats, 'actual_stagecosts'));
             this.verifyThat(stats.actual_stagecosts, IsScalar);
-            this.verifyGreaterThanOrEqual(stats.actual_stagecosts, 0);
+            this.verifyThat(stats.actual_stagecosts, IsGreaterThanOrEqualTo(0));
+            
+            this.verifyTrue(isfield(stats, 'plant_state_admissible'));
+            this.verifyThat(stats.plant_state_admissible, IsScalar);
+            this.verifyThat(stats.plant_state_admissible, IsOfClass('logical'));
+            this.verifyTrue(stats.plant_state_admissible);
             
             % one sc packet was received with delay 1
             this.verifyTrue(isfield(stats, 'sc_delays'));
@@ -259,17 +277,17 @@ classdef NcsDoLoopStepTest < matlab.unittest.TestCase
             
             this.verifyTrue(isfield(stats, 'sc_sent'));
             this.verifyThat(stats.sc_sent, IsScalar);
-            this.verifyClass(stats.sc_sent, ?logical);
+            this.verifyThat(stats.plant_state_admissible, IsOfClass('logical'));
             this.verifyTrue(stats.sc_sent);
             
             this.verifyTrue(isfield(stats, 'ca_sent'));
             this.verifyThat(stats.ca_sent, IsScalar);
-            this.verifyClass(stats.ca_sent, ?logical);
+            this.verifyThat(stats.plant_state_admissible, IsOfClass('logical'));
             this.verifyTrue(stats.ca_sent);
             
             this.verifyTrue(isfield(stats, 'ac_sent'));
             this.verifyThat(stats.ac_sent, IsScalar);
-            this.verifyClass(stats.ac_sent, ?logical);
+            this.verifyThat(stats.plant_state_admissible, IsOfClass('logical'));
             this.verifyFalse(stats.ac_sent);
             
             % we expect a cell array of data packets, column-vector like

@@ -1,11 +1,13 @@
-classdef NetworkedControlSystemTest < matlab.unittest.TestCase
+classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
+            'libncs_matlab/matlab', 'IncludingSubfolders', true)}) ...
+        NetworkedControlSystemTest < matlab.unittest.TestCase
     % Test cases for NetworkedControlSystem.
     
     % >> This function/class is part of CoCPN-Sim
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2017-2018  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2017-2019  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -26,13 +28,11 @@ classdef NetworkedControlSystemTest < matlab.unittest.TestCase
     %    You should have received a copy of the GNU General Public License
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
     
-    properties (Constant, Access = private)
+    properties (Access = private)
         ncsDefaultName = 'NCS';
         ncsDefaultSamplingInterval = 0.1;
         ncsDefaultNetworkType = NetworkType.UdpLikeWithAcks;
-    end
-    
-    properties (Access = private)
+        
         ncsName;
         ncsSamplingInterval;
         ncsNetworkType;
@@ -84,7 +84,7 @@ classdef NetworkedControlSystemTest < matlab.unittest.TestCase
             this.dimU = 2;
             this.dimY = 1;
             
-            this.A = eye(this.dimX);
+            this.A = 0.75 * eye(this.dimX);
             this.B = ones(this.dimX, this.dimU);
             this.C = [1 2 3];
             this.W = eye(this.dimX); % sys noise cov
@@ -111,9 +111,10 @@ classdef NetworkedControlSystemTest < matlab.unittest.TestCase
             
             this.controller = NominalPredictiveController(this.A, this.B, this.Q, this.R, this.controlSeqLength);
             this.controllerSubsystem = NcsControllerWithFilter(this.controller, this.filter, ...
-                this.filterPlantModel, this.sensor, zeros(this.dimU, 1));
+                this.filterPlantModel, this.sensor, zeros(this.dimU, 1), [1/4 1/4 1/4 1/4]');
             
-            this.ncsUnderTest = NetworkedControlSystem(this.ncsName, this.ncsSamplingInterval, this.ncsNetworkType);
+            this.ncsUnderTest = NetworkedControlSystem(this.controllerSubsystem, this.plantSubsystem, this.sensorSubsystem, ...
+                this.ncsName, this.ncsSamplingInterval, this.ncsNetworkType);
         end
     end
     
@@ -123,82 +124,171 @@ classdef NetworkedControlSystemTest < matlab.unittest.TestCase
             expectedErrId = 'NetworkedControlSystem:InvalidSamplingInterval';
             
             invalidSamplingInterval = this; % not a scalar
-            this.verifyError(@() NetworkedControlSystem(this.ncsName, invalidSamplingInterval), expectedErrId);
+            this.verifyError(@() NetworkedControlSystem(this.controllerSubsystem, this.plantSubsystem, this.sensorSubsystem, ...
+                this.ncsName, invalidSamplingInterval), expectedErrId);
             
             invalidSamplingInterval = 0; % scalar value, but not positive
-            this.verifyError(@() NetworkedControlSystem(this.ncsName, invalidSamplingInterval), expectedErrId);
+            this.verifyError(@() NetworkedControlSystem(this.controllerSubsystem, this.plantSubsystem, this.sensorSubsystem, ...
+                this.ncsName, invalidSamplingInterval), expectedErrId);
             
             invalidSamplingInterval = 1i; % scalar value, but not a real value
-            this.verifyError(@() NetworkedControlSystem(this.ncsName, invalidSamplingInterval), expectedErrId);
+            this.verifyError(@() NetworkedControlSystem(this.controllerSubsystem, this.plantSubsystem, this.sensorSubsystem, ...
+                this.ncsName, invalidSamplingInterval), expectedErrId);
         end
         
-        %% testNetworkedControlSystemNoArguments
-        function testNetworkedControlSystemNoArguments(this)
-            ncs = NetworkedControlSystem();
+        %% testNetworkedControlSystemInvalidNetworkType
+        function testNetworkedControlSystemInvalidNetworkType(this)
+            expectedErrId = 'NetworkedControlSystem:InvalidNetworkType';
             
-            this.verifyEqual(ncs.name, NetworkedControlSystemTest.ncsDefaultName);
-            this.verifyEqual(ncs.samplingInterval, NetworkedControlSystemTest.ncsDefaultSamplingInterval);
-            this.verifyEqual(ncs.networkType, NetworkedControlSystemTest.ncsDefaultNetworkType);
+            invalidNetworkType = this; % not a scalar
+            this.verifyError(@() NetworkedControlSystem(this.controllerSubsystem, this.plantSubsystem, this.sensorSubsystem, ...
+                this.ncsName, this.ncsSamplingInterval, invalidNetworkType), expectedErrId);
             
-            this.verifyEmpty(ncs.sensor);
-            this.verifyEmpty(ncs.controller);
-            this.verifyEmpty(ncs.plant);
+            invalidNetworkType = 0; % integer, but not positive
+            this.verifyError(@() NetworkedControlSystem(this.controllerSubsystem, this.plantSubsystem, this.sensorSubsystem, ...
+                this.ncsName, this.ncsSamplingInterval, invalidNetworkType), expectedErrId);
+            
+            invalidNetworkType = 1i; % scalar value, but not an integer
+            this.verifyError(@() NetworkedControlSystem(this.controllerSubsystem, this.plantSubsystem, this.sensorSubsystem, ...
+                this.ncsName, this.ncsSamplingInterval, invalidNetworkType), expectedErrId);
+            
+            invalidNetworkType = NetworkType.getMaxId + 1; % integer, but out of bounds
+            this.verifyError(@() NetworkedControlSystem(this.controllerSubsystem, this.plantSubsystem, this.sensorSubsystem, ...
+                this.ncsName, this.ncsSamplingInterval, invalidNetworkType), expectedErrId);
         end
         
-        %% testNetworkedControlSystemOneArgument
-        function testNetworkedControlSystemOneArgument(this)
-            ncs = NetworkedControlSystem(this.ncsName);
+        %% testNetworkedControlSystemNoOptionalArguments
+        function testNetworkedControlSystemNoOptionalArguments(this)
+            ncs = NetworkedControlSystem(this.controllerSubsystem, this.plantSubsystem, this.sensorSubsystem);
+            
+            this.verifyEqual(ncs.name, this.ncsDefaultName);
+            this.verifyEqual(ncs.samplingInterval, this.ncsDefaultSamplingInterval);
+            this.verifyEqual(ncs.networkType, this.ncsDefaultNetworkType);
+            
+            this.verifyEqual(ncs.sensor, this.sensorSubsystem);
+            this.verifyEqual(ncs.controller, this.controllerSubsystem);
+            this.verifyEqual(ncs.plant, this.plantSubsystem);
+        end
+        
+        %% testNetworkedControlSystemOneOptionalArgument
+        function testNetworkedControlSystemOneOptionalArgument(this)
+            ncs = NetworkedControlSystem(this.controllerSubsystem, this.plantSubsystem, this.sensorSubsystem, this.ncsName);
             
             this.verifyEqual(ncs.name, this.ncsName);
-            this.verifyEqual(ncs.samplingInterval, NetworkedControlSystemTest.ncsDefaultSamplingInterval);
-            this.verifyEqual(ncs.networkType, NetworkedControlSystemTest.ncsDefaultNetworkType);
+            this.verifyEqual(ncs.samplingInterval, this.ncsDefaultSamplingInterval);
+            this.verifyEqual(ncs.networkType, this.ncsDefaultNetworkType);
             
-            this.verifyEmpty(ncs.sensor);
-            this.verifyEmpty(ncs.controller);
-            this.verifyEmpty(ncs.plant);
+            this.verifyEqual(ncs.sensor, this.sensorSubsystem);
+            this.verifyEqual(ncs.controller, this.controllerSubsystem);
+            this.verifyEqual(ncs.plant, this.plantSubsystem);
         end
         
-        %% testNetworkedControlSystemTwoArguments
-        function testNetworkedControlSystemTwoArguments(this)
-            ncs = NetworkedControlSystem(this.ncsName, this.ncsSamplingInterval);
+        %% testNetworkedControlSystemTwoOptionalArguments
+        function testNetworkedControlSystemTwoOptionalArguments(this)
+            ncs = NetworkedControlSystem(this.controllerSubsystem, this.plantSubsystem, this.sensorSubsystem, ...
+                this.ncsName, this.ncsSamplingInterval);
             
             this.verifyEqual(ncs.name, this.ncsName);
             this.verifyEqual(ncs.samplingInterval, this.ncsSamplingInterval);
-            this.verifyEqual(ncs.networkType, NetworkedControlSystemTest.ncsDefaultNetworkType);
+            this.verifyEqual(ncs.networkType, this.ncsDefaultNetworkType);
             
-            this.verifyEmpty(ncs.sensor);
-            this.verifyEmpty(ncs.controller);
-            this.verifyEmpty(ncs.plant);
+            this.verifyEqual(ncs.sensor, this.sensorSubsystem);
+            this.verifyEqual(ncs.controller, this.controllerSubsystem);
+            this.verifyEqual(ncs.plant, this.plantSubsystem);
         end
         
-         %% testNetworkedControlSystemThreeArguments
-        function testNetworkedControlSystemThreeArguments(this)
-            ncs = NetworkedControlSystem(this.ncsName, this.ncsSamplingInterval, this.ncsNetworkType);
+        %% testNetworkedControlSystemThreeOptionalArguments
+        function testNetworkedControlSystemThreeOptionalArguments(this)
+            ncs = NetworkedControlSystem(this.controllerSubsystem, this.plantSubsystem, this.sensorSubsystem, ...
+                this.ncsName, this.ncsSamplingInterval, this.ncsNetworkType);
             
             this.verifyEqual(ncs.name, this.ncsName);
             this.verifyEqual(ncs.samplingInterval, this.ncsSamplingInterval);
             this.verifyEqual(ncs.networkType, this.ncsNetworkType);
             
-            this.verifyEmpty(ncs.sensor);
-            this.verifyEmpty(ncs.controller);
-            this.verifyEmpty(ncs.plant);
-        end
-        
-        %% testInitPlantNoPlant
-        function testInitPlantNoPlant(this)
-            % initially, the plant is not set
-            % assert this
-            this.assertEmpty(this.ncsUnderTest.plant);
-            expectedErrId = 'NetworkedControlSystem:CheckPlant';
+            this.verifyEqual(ncs.sensor, this.sensorSubsystem);
+            this.verifyEqual(ncs.controller, this.controllerSubsystem);
+            this.verifyEqual(ncs.plant, this.plantSubsystem);
             
-            this.verifyError(@() this.ncsUnderTest.initPlant(this.plantState), expectedErrId);
+            % pass network type as integer
+            type = NetworkType.TcpLike;
+            ncs = NetworkedControlSystem(this.controllerSubsystem, this.plantSubsystem, this.sensorSubsystem, ...
+                this.ncsName, this.ncsSamplingInterval, int64(type));
+            
+            this.verifyEqual(ncs.name, this.ncsName);
+            this.verifyEqual(ncs.samplingInterval, this.ncsSamplingInterval);
+            this.verifyEqual(ncs.networkType, type);     
+
+            this.verifyEqual(ncs.sensor, this.sensorSubsystem);
+            this.verifyEqual(ncs.controller, this.controllerSubsystem);
+            this.verifyEqual(ncs.plant, this.plantSubsystem);
+        end
+%%
+%%
+        %% testEvaluateRateQualityCharacteristicsInvalidTranslator
+        function testEvaluateRateQualityCharacteristicsInvalidTranslator(this)
+            expectedErrId = 'NetworkedControlSystem:CheckTranslator';
+            
+            actualQoc = 0.5;
+            targetQoc = 1;
+            this.verifyError(@() this.ncsUnderTest.evaluateRateQualityCharacteristics(actualQoc, targetQoc), expectedErrId);
+        end               
+        
+        %% testEvaluateRateQualityCharacteristics        
+        function testEvaluateRateQualityCharacteristics(this)
+            import matlab.unittest.constraints.IsScalar
+            import matlab.unittest.constraints.IsGreaterThanOrEqualTo
+            import matlab.unittest.constraints.IsLessThanOrEqualTo            
+            
+            qocRateCurve = cfit(fittype('a*x^2'), 1);
+            controlErrorQocCurve = cfit(fittype('a*x^3'), 1.5);
+            translator = NcsTranslator(qocRateCurve, controlErrorQocCurve, 1 / this.ncsUnderTest.samplingInterval);
+            
+            this.ncsUnderTest.attachTranslator(translator);
+            
+            actualQoc = 0.5;
+            desiredQoc = 1;
+            
+            [dataRate, rateChange] = this.ncsUnderTest.evaluateRateQualityCharacteristics(actualQoc, desiredQoc);
+            this.verifyThat(dataRate, IsScalar);
+            this.verifyThat(dataRate, IsGreaterThanOrEqualTo(0));
+            this.verifyThat(dataRate, IsLessThanOrEqualTo(1/this.ncsUnderTest.samplingInterval));
+            this.verifyThat(rateChange, IsScalar);
+            this.verifyThat(rateChange, IsGreaterThanOrEqualTo(0));
+        end
+%%
+%%
+        %% testEvaluateQualityRateCharacteristicsInvalidTranslator
+        function testEvaluateQualityRateCharacteristicsInvalidTranslator(this)
+            expectedErrId = 'NetworkedControlSystem:CheckTranslator';
+            
+            actualQoc = 0.5;
+            targetRate = 50; % packets per second
+            this.verifyError(@() this.ncsUnderTest.evaluateQualityRateCharacteristics(actualQoc, targetRate), expectedErrId);
         end
         
+        %% testEvaluateQualityRateCharacteristics
+        function testEvaluateQualityRateCharacteristics(this)
+            import matlab.unittest.constraints.IsScalar
+            import matlab.unittest.constraints.IsGreaterThanOrEqualTo            
+            
+            qocRateCurve = cfit(fittype('a*x^2'), 1);
+            controlErrorQocCurve = cfit(fittype('a*x^3'), 1.5);
+            translator = NcsTranslator(qocRateCurve, controlErrorQocCurve, 1 / this.ncsUnderTest.samplingInterval);
+            
+            this.ncsUnderTest.attachTranslator(translator);
+            
+            actualQoc = 0.5;
+            targetRate = 50; % packets per second
+            
+            qoc = this.ncsUnderTest.evaluateQualityRateCharacteristics(actualQoc, targetRate);
+            this.verifyThat(qoc, IsScalar);
+            this.verifyThat(qoc, IsGreaterThanOrEqualTo(0));            
+        end
+%%
+%%
         %% testInitPlantInvalidState
-        function testInitPlantInvalidState(this)
-            % first, we need to set the plant
-            this.ncsUnderTest.plant = this.plantSubsystem;
-            this.ncsUnderTest.controller = this.controllerSubsystem;
+        function testInitPlantInvalidState(this)            
             this.assertNotEmpty(this.ncsUnderTest.plant);
             this.assertNotEmpty(this.ncsUnderTest.controller);
             
@@ -220,24 +310,12 @@ classdef NetworkedControlSystemTest < matlab.unittest.TestCase
             invalidState = Gaussian(ones(this.dimX +1, 1), eye(this.dimX + 1)); % Distribution, but wrong dimension
             this.verifyError(@() this.ncsUnderTest.initPlant(invalidState), expectedErrId);
         end
-        
-        %% testInitStatisticsRecordingNoPlant
-        function testInitStatisticsRecordingNoPlant(this)
-            % initially, the plant is not set
-            % assert this
-            this.assertEmpty(this.ncsUnderTest.plant);
-            expectedErrId = 'NetworkedControlSystem:CheckPlant';
-            
-            this.verifyError(@() this.ncsUnderTest.initStatisticsRecording(this.maxLoopSteps), expectedErrId);
-        end
-                     
-              
+%%
+%%
         %% testInitStatisticsRecordingInvalidMaxLoopSteps
-        function testInitStatisticsRecordingInvalidMaxLoopSteps(this)
-            % set plant and actuator
-            this.ncsUnderTest.plant = this.plantSubsystem;
-            
+        function testInitStatisticsRecordingInvalidMaxLoopSteps(this)            
             this.assertNotEmpty(this.ncsUnderTest.plant);
+            this.assertNotEmpty(this.ncsUnderTest.controller);
              
             expectedErrId = 'NetworkedControlSystem:InitStatisticsRecording';
             
@@ -258,10 +336,7 @@ classdef NetworkedControlSystemTest < matlab.unittest.TestCase
         end
         
         %% testInitStatisticsRecording
-        function testInitStatisticsRecording(this)
-            % set plant and controller
-            this.ncsUnderTest.plant = this.plantSubsystem;
-            this.ncsUnderTest.controller = this.controllerSubsystem;
+        function testInitStatisticsRecording(this)            
             this.assertNotEmpty(this.ncsUnderTest.plant);
             this.assertNotEmpty(this.ncsUnderTest.controller);
                  
@@ -278,20 +353,9 @@ classdef NetworkedControlSystemTest < matlab.unittest.TestCase
             this.verifyEqual(recordedInitialMode, this.controlSeqLength + 1);
          
         end
-        
-        %% testGetStatisticsNotInitialized
-        function testGetStatisticsNotInitialized(this)
-            % initially, the statistics property should be the empty matrix
-            
-            this.verifyEmpty(this.ncsUnderTest.getStatistics());
-        end
-        
+                
         %% testGetStatistics
-        function testGetStatistics(this)
-            % set plant and controller and initialize the
-            % recording of the statistics
-            this.ncsUnderTest.plant = this.plantSubsystem;
-            this.ncsUnderTest.controller = this.controllerSubsystem;
+        function testGetStatistics(this)            
             this.assertNotEmpty(this.ncsUnderTest.plant);
             this.assertNotEmpty(this.ncsUnderTest.controller);
             
@@ -310,21 +374,9 @@ classdef NetworkedControlSystemTest < matlab.unittest.TestCase
             this.verifyTrue(isfield(actualStatistics, 'numDiscardedControlSequences'));
             this.verifyTrue(isfield(actualStatistics, 'controllerStates'));
         end
-        
-        %% testGetStageCostsNoPlant
-        function testGetStageCostsNoPlant(this)
-            % initially, the plant is not set
-            % assert this
-            this.assertEmpty(this.ncsUnderTest.plant);
-            expectedErrId = 'NetworkedControlSystem:CheckPlant';
-            
-            this.verifyError(@() this.ncsUnderTest.getStageCosts(1), expectedErrId);
-        end
-        
+                
          %% testGetStageCostsNotInitialized
-        function testGetStageCostsNotInitialized(this)
-            this.ncsUnderTest.controller = this.controllerSubsystem;
-            this.ncsUnderTest.plant = this.plantSubsystem;
+        function testGetStageCostsNotInitialized(this)            
             this.assertNotEmpty(this.ncsUnderTest.plant);
             % plant was set, but not initialized
             % we expect zero to be returned independent of timestep
@@ -334,13 +386,9 @@ classdef NetworkedControlSystemTest < matlab.unittest.TestCase
         end
         
         %% testGetStageCosts
-        function testGetStageCosts(this)
-            % set and initalize plant, controller, sensor
-            this.ncsUnderTest.plant = this.plantSubsystem;
-            this.assertNotEmpty(this.ncsUnderTest.plant);
-            this.ncsUnderTest.controller = this.controllerSubsystem;
-            this.filter.setState(this.plantStateDistribution);
-            this.ncsUnderTest.sensor = this.sensorSubsystem;
+        function testGetStageCosts(this)           
+            this.assertNotEmpty(this.ncsUnderTest.plant);            
+            this.filter.setState(this.plantStateDistribution);            
             
             % initialize plant with deterministic state
             this.ncsUnderTest.initPlant(this.plantState);
@@ -357,67 +405,79 @@ classdef NetworkedControlSystemTest < matlab.unittest.TestCase
             actualStageCosts = this.ncsUnderTest.getStageCosts(timestep);
             this.verifyEqual(actualStageCosts, expectedStageCosts);
          end
+                
         
-        %% testGetQualityOfControlNoPlant
-        function testGetQualityOfControlNoPlant(this)
-            % initially, the plant is not set
-            % assert this
-            this.assertEmpty(this.ncsUnderTest.plant);
-            expectedErrId = 'NetworkedControlSystem:CheckPlant';
-            
-            this.verifyError(@() this.ncsUnderTest.getQualityOfControl(1), expectedErrId);
-        end
-        
-        %% testGetQualityOfControlNotInitialized
-        function testGetQualityOfControlNotInitialized(this)
-            this.ncsUnderTest.controller = this.controllerSubsystem;
-            this.ncsUnderTest.plant = this.plantSubsystem;
+        %% testGetControlErrorNotInitialized
+        function testGetControlErrorNotInitialized(this)            
             this.assertNotEmpty(this.ncsUnderTest.plant);
             % plant was set, but not initialized
-             % we expect zero to be returned independent of timestep
+            % we expect zero to be returned independent of timestep
             
-            this.verifyEqual(this.ncsUnderTest.getQualityOfControl(1), 0);
-            this.verifyEqual(this.ncsUnderTest.getQualityOfControl(10), 0);
+            this.verifyEqual(this.ncsUnderTest.getControlError(1), 0);
+            this.verifyEqual(this.ncsUnderTest.getControlError(10), 0);
         end
         
-        %% testGetQualityOfControl
-        function testGetQualityOfControl(this)
-            % set and initalize plant, controller
-            this.ncsUnderTest.plant = this.plantSubsystem;
-            this.assertNotEmpty(this.ncsUnderTest.plant);
-            this.ncsUnderTest.controller = this.controllerSubsystem;
+        %% testGetControlError
+        function testGetControlError(this)
+            this.assertNotEmpty(this.ncsUnderTest.plant);            
+            this.filter.setState(this.plantStateDistribution);
             % initialize plant with deterministic state
             this.ncsUnderTest.initPlant(this.plantState);
-            % plant state is [1 1 ... 1], so the norm is just sqrt(dimX)
-            expectedQoc = sqrt(this.dimX);
             
-            actualQoc = this.ncsUnderTest.getQualityOfControl(1);
-             
-            this.verifyEqual(actualQoc, expectedQoc);
+            % and ensure that statistics is recorded
+            this.ncsUnderTest.initStatisticsRecording(this.maxLoopSteps);
+            this.assertNotEmpty(this.ncsUnderTest.getStatistics());
+            this.assertNotEmpty(this.ncsUnderTest.getStatistics().trueStates);
+            this.assertNotEmpty(this.ncsUnderTest.getStatistics().controllerStates);
             
-            % now init the plant with a Gaussian state
-            this.ncsUnderTest.initPlant(this.plantStateDistribution);
-            % we can only verify that the resulting QoC value is nonnegative
-            this.verifyGreaterThanOrEqual(this.ncsUnderTest.getQualityOfControl(1), 0);
+            % perform three control cycles without any data packets
+            % so there is no input
+            timestep = 1;
+            for k=0:10
+                this.ncsUnderTest.step(timestep+k, [], [], []);
+            end            
+            trueStates = this.ncsUnderTest.getStatistics().trueStates;
+            controllerStates = this.ncsUnderTest.getStatistics().controllerStates;
+            
+            % compute "instantaneous error" at times 1, 2, 3
+            %k=1
+            expectedError = norm(trueStates(:, 2));
+            expectedEstimatedError = norm(controllerStates(:, 2));
+            [actualError, estimatedError] = this.ncsUnderTest.getControlError(1);
+            this.verifyEqual(actualError, expectedError, 'AbsTol', 1e-8);
+            this.verifyEqual(estimatedError, expectedEstimatedError, 'AbsTol', 1e-8);
+            %k=2
+            expectedError = norm(trueStates(:, 2)) + norm(trueStates(:, 3));
+            expectedEstimatedError = norm(controllerStates(:, 2)) + norm(controllerStates(:, 3));
+            [actualError, estimatedError] = this.ncsUnderTest.getControlError(2);
+            this.verifyEqual(actualError, expectedError, 'AbsTol', 1e-8);
+            this.verifyEqual(estimatedError, expectedEstimatedError, 'AbsTol', 1e-8);
+            %k=3
+            expectedError = norm(trueStates(:, 2)) + norm(trueStates(:, 3)) + norm(trueStates(:, 4));
+            expectedEstimatedError = norm(controllerStates(:, 2)) + norm(controllerStates(:, 3)) + norm(controllerStates(:, 4));
+            [actualError, estimatedError] = this.ncsUnderTest.getControlError(3);
+            this.verifyEqual(actualError, expectedError, 'AbsTol', 1e-8);
+            this.verifyEqual(estimatedError, expectedEstimatedError, 'AbsTol', 1e-8);
+            
+            %k=11
+            expectedError = sum(sqrt(sum((trueStates(:, 3:12) .^ 2))));
+            expectedEstimatedError = sum(sqrt(sum((controllerStates(:, 3:12) .^ 2))));
+            [actualError, estimatedError] = this.ncsUnderTest.getControlError(11);
+            this.verifyEqual(actualError, expectedError, 'AbsTol', 1e-8);
+            this.verifyEqual(estimatedError, expectedEstimatedError, 'AbsTol', 1e-8);
         end
         
         %% testStepNoPackets
         function testStepNoPackets(this)
-             import matlab.unittest.constraints.IsScalar;
-            
-           % set and initalize plant
-            this.ncsUnderTest.plant = this.plantSubsystem;
-            this.ncsUnderTest.controller = this.controllerSubsystem;
-            
+            import matlab.unittest.constraints.IsScalar;
+                       
             this.assertNotEmpty(this.ncsUnderTest.plant); 
             this.assertNotEmpty(this.ncsUnderTest.controller);
             
             this.ncsUnderTest.initPlant(this.zeroPlantState);
             this.ncsUnderTest.initStatisticsRecording(this.maxLoopSteps);
             this.filter.setState(this.zeroPlantStateDistribution);
-            
-            this.ncsUnderTest.sensor = this.sensorSubsystem;
-            
+                        
             timestep = 1;
             [caPacket, scPacket, controllerAck] = this.ncsUnderTest.step(timestep, [], [], []);
             

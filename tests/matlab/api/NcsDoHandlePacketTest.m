@@ -1,11 +1,13 @@
-classdef NcsDoHandlePacketTest < matlab.unittest.TestCase
+classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
+            'libncs_matlab/matlab', 'IncludingSubfolders', true)}) ...
+        NcsDoHandlePacketTest < matlab.unittest.TestCase
     % Test cases for the api function ncs_doHandlePacket.
     
     % >> This function/class is part of CoCPN-Sim
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2018  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2018-2019 Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -54,10 +56,40 @@ classdef NcsDoHandlePacketTest < matlab.unittest.TestCase
     methods (TestMethodSetup)
         %% init
         function init(this)
+            maxMeasDelay = 2;
+            controlSeqLength = 2;
+            
+            dimX = 3;
+            dimU = 2;
+            
+            A = 0.75 * eye(dimX);
+            B = ones(dimX, dimU);
+            C = [1 2 3];
+            W = eye(dimX); % sys noise cov
+            V = 0.1^2; % variance of the meas noise
+            Q = 2 * eye(dimX);
+            R = 0.5 * eye(dimU);
+            plant = LinearPlant(A, B, W);
+            sensor = LinearMeasurementModel(C);
+            sensor.setNoise(Gaussian(0, V));
+            sensorSubsystem = NcsSensor(sensor);
+            
+            filter = DelayedKF(maxMeasDelay);
+            filterPlantModel = DelayedKFSystemModel(A, B, Gaussian(zeros(dimX, 1), W), ...
+                controlSeqLength + 1, maxMeasDelay, [1/3 1/3 1/3]);
+            
+            actuator = BufferingActuator(controlSeqLength, maxMeasDelay, zeros(dimU, 1));
+            plantSubsystem = NcsPlant(plant, actuator);
+            
+            controller = NominalPredictiveController(A, B, Q, R, controlSeqLength);
+            controllerSubsystem = NcsControllerWithFilter(controller, filter, ...
+                filterPlantModel, sensor, zeros(dimU, 1), [1/4 1/4 1/4 1/4]');            
+            
             this.componentMap = ComponentMap.getInstance();    
             this.packetBuffer = DataPacketBuffer.getInstance();
             this.tickerInterval = .2; % 0.2s
-            this.ncs = NetworkedControlSystem('NCS', this.tickerInterval, NetworkType.TcpLike);
+            this.ncs = NetworkedControlSystem(controllerSubsystem, plantSubsystem, sensorSubsystem, ...
+                'NCS', this.tickerInterval, NetworkType.TcpLike);
             this.ncsHandle = this.componentMap.addComponent(this.ncs);
             
             this.timestamp = 2;

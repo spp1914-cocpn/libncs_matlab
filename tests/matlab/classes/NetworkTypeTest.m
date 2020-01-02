@@ -1,13 +1,13 @@
 classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             'libncs_matlab/matlab', 'IncludingSubfolders', true)}) ...
-        NcsSeedRngTest < matlab.unittest.TestCase
-    % Test cases for the api function ncs_seedRng.
+        NetworkTypeTest < matlab.unittest.TestCase
+    % Test cases for NetworkType.
     
     % >> This function/class is part of CoCPN-Sim
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2018  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2019  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -29,42 +29,38 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
     
     properties (Access = private)
-        seed;
+        tcpLike;
+        udpLike;
+        udpLikeWithAcks;
     end
     
     methods (TestMethodSetup)
         %% init
         function init(this)
-            this.seed = 42;
+            this.tcpLike = NetworkType.TcpLike;
+            this.udpLike = NetworkType.UdpLike;
+            this.udpLikeWithAcks = NetworkType.UdpLikeWithAcks;
         end
     end
     
     methods (Test)
-        %% testInvalidSeed
-        function testInvalidSeed(this)
-            expectedErrId = 'ncs_seedRng:InvalidSeed';
-            
-            invalidSeed = [-1 -1]; % not a scalar            
-            this.verifyError(@() ncs_seedRng(invalidSeed), expectedErrId);
-            
-            invalidSeed = -42; % not nonnegative           
-            this.verifyError(@() ncs_seedRng(invalidSeed), expectedErrId);
-            
-            invalidSeed = -42; % not an integer            
-            this.verifyError(@() ncs_seedRng(invalidSeed), expectedErrId);
+        %% testPreviousPlantModeAvailable
+        function testPreviousPlantModeAvailable(this)            
+            this.verifyTrue(this.tcpLike.previousPlantModeAvailable());           
+            this.verifyFalse(this.udpLike.previousPlantModeAvailable());
+            this.verifyFalse(this.udpLikeWithAcks.previousPlantModeAvailable());
         end
         
-        %% test
-        function test(this)
-            % retrieve the settings
-            prev = rng;
-            % call the api function
-            ncs_seedRng(this.seed);
-           
-            after = rng;
-            this.verifyTrue(after.Seed == this.seed);
-            % type should not be changed
-            this.verifyEqual(prev.Type, after.Type);
+        %% testSendOutAck
+        function testSendOutAck(this)            
+            this.verifyFalse(this.tcpLike.sendOutAck());
+            this.verifyFalse(this.udpLike.sendOutAck());
+            this.verifyTrue(this.udpLikeWithAcks.sendOutAck());
+        end
+        
+        %% testGetMaxId
+        function testGetMaxId(this)
+            this.verifyEqual(NetworkType.getMaxId(), 3);
         end
     end
     

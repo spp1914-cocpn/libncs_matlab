@@ -32,6 +32,10 @@ classdef NcsPlant < handle
          actuator@BufferingActuator;
     end
     
+    properties (SetAccess = private, GetAccess = public)
+         statistics;
+    end
+    
     properties (GetAccess = public, Dependent)
         dimState;
         dimInput;
@@ -68,7 +72,7 @@ classdef NcsPlant < handle
         end
               
         %% step
-        function [controllerAck, numDiscardedSeq, actualInput, plantMode, newPlantState] ...
+        function [controllerAck, plantMode, newPlantState] ...
                 = step(this, timestep, caPackets, plantState)
             % Process received packets (i.e., control sequences) from the controller and apply an appropriate input u_k
             % as part of a control cycle in an NCS, i.e., proceed from time k to time k+1.
@@ -92,16 +96,6 @@ classdef NcsPlant < handle
             %      packet for the corresponding data packet is created.
             %      Empty matrix is returned in case none became active.
             %
-            %   << numDiscardedSeq (Nonnegative integer)
-            %      The number of received control sequences that were
-            %      discarded in this step. Possible values are
-            %      numel(caPackets) and numel(caPackets) - 1.
-            %
-            %   << actualInput (Column vector)
-            %      The buffered control input to be applied at the given time step (u_k), if
-            %      present. If not, then the default input is applied and
-            %      returned here.
-            %
             %   << plantMode (Positive integer)
             %      The mode of the underlying MJLS that corresponds to the
             %      applied input (i.e., the age of the buffered sequence), i.e., theta_k.
@@ -121,6 +115,24 @@ classdef NcsPlant < handle
             % apply the input to proceed to the next time step
             this.plant.setSystemInput(actualInput);
             newPlantState = this.plant.simulate(plantState);
+            
+            % record the number of discarded control packets            
+            this.statistics.numDiscardedControlSequences(timestep) = numDiscardedSeq;
+            % record the data about true input and state
+            this.statistics.appliedInputs(:, timestep) = actualInput; % this input was applied at time k (u_k)
+            this.statistics.trueModes(timestep + 1) = plantMode; % the mode theta_k
+            this.statistics.trueStates(:, timestep + 1) = plantState; % store x_k
+        end
+        
+        %% initStatisticsRecording
+        function initStatisticsRecording(this, maxLoopSteps, plantState, plantMode)        
+            this.statistics.trueStates = nan(this.dimState, maxLoopSteps + 1);
+            this.statistics.trueModes = nan(1, maxLoopSteps + 1);
+            this.statistics.appliedInputs = nan(this.dimInput, maxLoopSteps);
+            this.statistics.numDiscardedControlSequences = nan(1, maxLoopSteps);
+            
+            this.statistics.trueModes(1) = plantMode;
+            this.statistics.trueStates(:, 1) = plantState;
         end
         
         %% changeActuatorSequenceLength
@@ -134,6 +146,11 @@ classdef NcsPlant < handle
             %      The new sequence length to be used.
             
             this.actuator.changeControlSequenceLength(newSequenceLength);
+        end
+        
+        %% isStateAdmissible
+        function isAdmissible = isStateAdmissible(this, state)
+            isAdmissible = this.plant.isValidState(state);
         end
     end
     

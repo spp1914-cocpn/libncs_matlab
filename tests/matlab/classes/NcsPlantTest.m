@@ -1,11 +1,13 @@
-classdef NcsPlantTest < matlab.unittest.TestCase
+classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
+            'libncs_matlab/matlab', 'IncludingSubfolders', true)}) ...
+        NcsPlantTest < matlab.unittest.TestCase
     % Test cases for NcsPlant.
     
     % >> This function/class is part of CoCPN-Sim
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2018  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2018-2019  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -77,19 +79,52 @@ classdef NcsPlantTest < matlab.unittest.TestCase
             this.verifyEqual(ncsPlant.dimInput, this.dimU);
         end
         
+        %% testInitStatisticsRecording
+        function testInitStatisticsRecording(this)
+            maxLoopSteps = 100;
+            plantState = ones(this.dimX, 1);
+            plantMode = 2;
+            
+            this.ncsPlantUnderTest.initStatisticsRecording(maxLoopSteps, plantState, plantMode);
+            
+            % check the side effect, i.e., the proper creation and initialization of the structure to
+            % store the data            
+            actualStatistics = this.ncsPlantUnderTest.statistics;
+            this.verifyTrue(isfield(actualStatistics, 'trueStates'));
+            this.verifyEqual(actualStatistics.trueStates, [plantState nan(this.dimX, maxLoopSteps)]);
+            
+            this.verifyTrue(isfield(actualStatistics, 'trueModes'));
+            this.verifyEqual(actualStatistics.trueModes, [plantMode nan(1, maxLoopSteps)]);
+            
+            this.verifyTrue(isfield(actualStatistics, 'appliedInputs'));
+            this.verifyEqual(actualStatistics.appliedInputs, nan(this.dimU, maxLoopSteps));
+            
+            this.verifyTrue(isfield(actualStatistics, 'numDiscardedControlSequences'));
+            this.verifyEqual(actualStatistics.numDiscardedControlSequences, nan(1, maxLoopSteps));
+        end
+        
         %% testStepNoPackets
         function testStepNoPackets(this)
             plantState = [2 3 4]';
             timestep = 1;
             caPackets = [];
             
-            [controllerAck, numDiscardedSeq, actualInput, plantMode, newPlantState] ...
+            this.ncsPlantUnderTest.initStatisticsRecording(10, plantState, 1);
+                        
+            [controllerAck, plantMode, newPlantState] ...
                 = this.ncsPlantUnderTest.step(timestep, caPackets, plantState);
+            
+            numDiscardedSeq = this.ncsPlantUnderTest.statistics.numDiscardedControlSequences(timestep);
+            actualInput = this.ncsPlantUnderTest.statistics.appliedInputs(:, timestep);
+            storedPlantMode = this.ncsPlantUnderTest.statistics.trueModes(timestep + 1);
+            storedPlantState = this.ncsPlantUnderTest.statistics.trueStates(:, timestep + 1);
             
             this.verifyEmpty(controllerAck);
             this.verifyEqual(numDiscardedSeq, 0);
             this.verifyEqual(actualInput, zeros(this.dimU, 1));
             this.verifyEqual(plantMode, this.controlSeqLength + 1);
+            this.verifyEqual(storedPlantMode, this.controlSeqLength + 1);
+            this.verifyEqual(storedPlantState, plantState);
             this.verifyNotEmpty(newPlantState);
         end
         
@@ -103,17 +138,26 @@ classdef NcsPlantTest < matlab.unittest.TestCase
             dataPacket.sourceAddress = 2;
             dataPacket.destinationAddress = 1;
             
+            this.ncsPlantUnderTest.initStatisticsRecording(10, plantState, 1);
+            
             caPackets = dataPacket;
-            [controllerAck, numDiscardedSeq, actualInput, plantMode, newPlantState] ...
+            [controllerAck, plantMode, newPlantState] ...
                 = this.ncsPlantUnderTest.step(timestep + dataPacket.packetDelay, caPackets, plantState);
             
             expectedMode = dataPacket.packetDelay + 1;
             expectedInput = this.controlSequence(:, expectedMode);
             
+            numDiscardedSeq = this.ncsPlantUnderTest.statistics.numDiscardedControlSequences(timestep + dataPacket.packetDelay);
+            actualInput = this.ncsPlantUnderTest.statistics.appliedInputs(:, timestep + dataPacket.packetDelay);
+            storedPlantMode = this.ncsPlantUnderTest.statistics.trueModes(timestep + 1 + dataPacket.packetDelay);
+            storedPlantState = this.ncsPlantUnderTest.statistics.trueStates(:, timestep + 1 + dataPacket.packetDelay);
+            
             this.verifyNotEmpty(controllerAck);
             this.verifyEqual(numDiscardedSeq, 0);
             this.verifyEqual(plantMode, expectedMode);
+            this.verifyEqual(storedPlantMode, expectedMode);
             this.verifyEqual(actualInput, expectedInput);
+            this.verifyEqual(storedPlantState, plantState);
             this.verifyNotEmpty(newPlantState);
         end
        
@@ -123,7 +167,9 @@ classdef NcsPlantTest < matlab.unittest.TestCase
             timestep = 2;
             id= 42;
             newSeqLength = 1;
-                       
+            
+            this.ncsPlantUnderTest.initStatisticsRecording(10, plantState, 1);
+            
             dataPacket = DataPacket(this.controlSequence(:, 1:newSeqLength), timestep, id);
             dataPacket.packetDelay = 0;
             dataPacket.sourceAddress = 2;
@@ -133,16 +179,23 @@ classdef NcsPlantTest < matlab.unittest.TestCase
             % now change the sequence length
             this.ncsPlantUnderTest.changeActuatorSequenceLength(newSeqLength);
             % then perform a step
-            [controllerAck, numDiscardedSeq, actualInput, plantMode, newPlantState] ...
+            [controllerAck, plantMode, newPlantState] ...
                 = this.ncsPlantUnderTest.step(timestep + dataPacket.packetDelay, caPackets, plantState);
             
             expectedMode = dataPacket.packetDelay + 1;
             expectedInput = this.controlSequence(:, expectedMode);
 
+            numDiscardedSeq = this.ncsPlantUnderTest.statistics.numDiscardedControlSequences(timestep + dataPacket.packetDelay);
+            actualInput = this.ncsPlantUnderTest.statistics.appliedInputs(:, timestep + dataPacket.packetDelay);
+            storedPlantMode = this.ncsPlantUnderTest.statistics.trueModes(timestep + 1 + dataPacket.packetDelay);
+            storedPlantState = this.ncsPlantUnderTest.statistics.trueStates(:, timestep + 1 + dataPacket.packetDelay);
+            
             this.verifyNotEmpty(controllerAck);
             this.verifyEqual(numDiscardedSeq, 0);
             this.verifyEqual(plantMode, expectedMode);
+            this.verifyEqual(storedPlantMode, expectedMode);
             this.verifyEqual(actualInput, expectedInput);
+            this.verifyEqual(storedPlantState, plantState);
             this.verifyNotEmpty(newPlantState);
         end
         
@@ -156,10 +209,15 @@ classdef NcsPlantTest < matlab.unittest.TestCase
             dataPacket.sourceAddress = 2;
             dataPacket.destinationAddress = 1;
             
+            this.ncsPlantUnderTest.initStatisticsRecording(10, plantState, 1);
+            
             caPackets = dataPacket;
             % perform a step first so that packet is buffered
-            [controllerAck, numDiscardedSeq, actualInput, plantMode, newPlantState] ...
+            [controllerAck, plantMode, newPlantState] ...
                 = this.ncsPlantUnderTest.step(timestep + dataPacket.packetDelay, caPackets, plantState);
+            
+            numDiscardedSeq = this.ncsPlantUnderTest.statistics.numDiscardedControlSequences(timestep + dataPacket.packetDelay);
+            
             this.assertNotEmpty(controllerAck); % assert that a packet is buffered
             this.assertEqual(numDiscardedSeq, 0);
             
@@ -168,17 +226,38 @@ classdef NcsPlantTest < matlab.unittest.TestCase
             this.ncsPlantUnderTest.changeActuatorSequenceLength(newSeqLength);
             caPackets = [];
             % then perform a step again
-            [controllerAck, numDiscardedSeq, actualInput, plantMode, newPlantState] ...
+            [controllerAck, plantMode, newPlantState] ...
                 = this.ncsPlantUnderTest.step(timestep + dataPacket.packetDelay + 1, caPackets, plantState);
             
             expectedMode = newSeqLength + 1;
             expectedInput = zeros(this.dimU, 1); % the default input
 
+            numDiscardedSeq = this.ncsPlantUnderTest.statistics.numDiscardedControlSequences(timestep + dataPacket.packetDelay + 1);
+            actualInput = this.ncsPlantUnderTest.statistics.appliedInputs(:, timestep + dataPacket.packetDelay + 1);
+            storedPlantMode = this.ncsPlantUnderTest.statistics.trueModes(timestep + 1 + dataPacket.packetDelay + 1);
+            storedPlantState = this.ncsPlantUnderTest.statistics.trueStates(:, timestep + 1 + dataPacket.packetDelay + 1);
+            
             this.verifyEmpty(controllerAck); % we did not receive a packet from the controller
             this.verifyEqual(numDiscardedSeq, 0);
             this.verifyEqual(plantMode, expectedMode);
+            this.verifyEqual(storedPlantMode, expectedMode);
             this.verifyEqual(actualInput, expectedInput);
+            this.verifyEqual(storedPlantState, plantState);
             this.verifyNotEmpty(newPlantState);
+        end
+        
+        %% testIsStateAdmissible
+        function testIsStateAdmissible(this)
+            this.assertEmpty(this.sysModel.stateConstraints);
+            plantState = [2 3 4]';
+            % no constraints given
+            this.verifyTrue(this.ncsPlantUnderTest.isStateAdmissible(plantState));
+            
+            % set some constraints and check again
+            this.sysModel.setStateConstraints([2 3 5], [7 8 9]);
+            this.assertNotEmpty(this.sysModel.stateConstraints);
+            
+            this.verifyFalse(this.ncsPlantUnderTest.isStateAdmissible(plantState));
         end
     end
 end
