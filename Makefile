@@ -9,38 +9,55 @@ BUILD_DIR = out
 LIBNAME = libncs_matlab
 API_FILES = $(wildcard $(API_DIR)/*.m) $(wildcard $(API_DIR)/*/*.m)
 SRC_FILES = $(shell find $(SRC_DIR)/ -name '*.m')
+# the following variable contains files to be added to the deployable archive using mcc -a
+MCC_ADD_FILES = $(MLIB_DIR)/Classes $(MEX_BUILD_DIR) $(MLIB_DIR)/external/yalmip $(wildcard $(MLIB_DIR)/external/sdpt3/*.m) $(wildcard $(MLIB_DIR)/external/sdpt3/*/*.m)
+# the following variable contains folders to be included for the compilation using mcc -I
+MCC_INC_DIRS = $(SRC_DIR)/classes $(SRC_DIR)/functions $(MLIB_DIR)/Classes $(MLIB_DIR)/external
+MCC_ADD_FLAGS = $(addprefix -I , $(MCC_INC_DIRS)) $(addprefix -a , $(MCC_ADD_FILES))
+
+#
+# persistent make flags support
+#
+MAKECONF = ../makeconf
+
+ifneq (,$(wildcard $(MAKECONF)))
+	include $(MAKECONF)
+endif
 
 # use open mp for mex files by default
-OPENMP=1
+OPENMP ?= 1
 ifeq ($(OPENMP),1)
     OPENMP_FLAG = -fopenmp
 else
     OPENMP_FLAG =
-endif  
+endif
 
 MEX = mex
-#MEX_FLAGS = -DDEFINEUNIX -largeArrayDims -lopenblas # maybe compile mtimesx using -lmwblas with is shipped by matlab
-MEX_FLAGS = -DDEFINEUNIX -largeArrayDims -lmwblas
+MEX_FLAGS = -DDEFINEUNIX -largeArrayDims -lmwblas 
 MEX_COPTIMFLAGS = CXXOPTIMFLAGS="-O3 $(OPENMP_FLAG)"
 MEX_LDFLAGS = LDFLAGS="$(LDFLAGS) $(OPENMP_FLAG)"
 MEX_LDOPTIMFLAGS = LDOPTIMFLAGS="$(LDOPTIMFLAGS) $(OPENMP_FLAG)"
 MEX_CXXFLAGS = CXXFLAGS="$(CXXFLAGS) -std=c++14 -fPIC $(OPENMP_FLAG) -O3 -Wall -ffast-math"
-MEX_BUILD_DIR = ../matlab/out
-MEX_SRC_DIR = ../matlab/external/mtimesx
-MEX_SRC = mtimesx
 
+# mex files (C) of externals 
+MEX_BUILD_DIR = $(MLIB_DIR)/$(BUILD_DIR)
+MEX_SRC_DIR = $(MLIB_DIR)/external
+MEX_SRC_DIR_SDPT = $(MEX_SRC_DIR)/sdpt3/Solver/Mexfun
+MEX_SRC_DIR_MTIMESX = $(MEX_SRC_DIR)/mtimesx
+MEX_SRC := $(MEX_SRC_DIR_MTIMESX)/mtimesx.c $(wildcard $(MEX_SRC_DIR_SDPT)/*.c)
+MEX_OUT_FILES := $(addprefix $(MEX_BUILD_DIR)/, $(notdir $(MEX_SRC:.c=.mexa64)))
+
+# own mex files (C++)
 #armadillo requires blas/openblas and lapack (and not mwlapack)
 MEX_ADD_SRC_DIR = $(MLIB_DIR)/Classes/Controllers/mex
-ADD_STRUCTURE := $(shell find $(MEX_ADD_SRC_DIR) -type d)
-MEX_ADD_SRC := $(addsuffix /*, $(ADD_STRUCTURE))
-MEX_ADD_SRC := $(wildcard $(MEX_ADD_SRC))
-MEX_ADD_SRC := $(filter %.cpp, $(MEX_ADD_SRC))
+MEX_ADD_SRC := $(wildcard $(MEX_ADD_SRC_DIR)/*/*.cpp)
 MEX_ADD_OUT_FILES := $(addprefix $(MEX_BUILD_DIR)/, $(notdir $(MEX_ADD_SRC:.cpp=.mexa64)))
-#MEX_ADD_FLAGS = -DARMA_BLAS_LONG_LONG -DARMA_DONT_USE_WRAPPER -DARMA_NO_DEBUG -llapack -I$(MLIB_DIR)/external/armadillo/include -I$(MLIB_DIR)/external/armadillo/mex_interface
-MEX_ADD_FLAGS = -DARMA_BLAS_LONG_LONG -DARMA_DONT_USE_WRAPPER -DARMA_NO_DEBUG -lmwlapack -I$(MLIB_DIR)/external/armadillo/include -I$(MLIB_DIR)/external/armadillo/mex_interface
+MEX_ADD_INC_DIRS = $(MLIB_DIR)/external/armadillo/include $(MLIB_DIR)/external/armadillo/mex_interface
+MEX_ADD_FLAGS = -DARMA_BLAS_LONG_LONG -DARMA_DONT_USE_WRAPPER -DARMA_NO_DEBUG -lmwlapack $(addprefix -I, $(MEX_ADD_INC_DIRS))
 
-VPATH=$(dir $(MEX_ADD_SRC))
+VPATH=$(dir $(MEX_SRC)) $(dir $(MEX_ADD_SRC))
 
+# prints the value of the mentioned variable
 print-%: ; @echo $*=$($*)
 
 all: mex $(LIBNAME)
@@ -51,15 +68,15 @@ $(BUILD_DIR):
 $(LIBNAME): $(BUILD_DIR) $(BUILD_DIR)/$(LIBNAME).so
 
 $(BUILD_DIR)/$(LIBNAME).so: $(SRC_FILES)
-	$(MCC) $(MCC_FLAGS) -B cpplib:$(LIBNAME) $(API_FILES) -I $(SRC_DIR)/classes -I $(SRC_DIR)/functions -I $(MLIB_DIR)/Classes -I $(MLIB_DIR)/external -a $(MLIB_DIR)/Classes -a $(MEX_BUILD_DIR) -a $(MLIB_DIR)/external/yalmip -a $(MLIB_DIR)/external/NonlinearEstimationToolbox -a $(MLIB_DIR)/external/functions -d $(BUILD_DIR) 
+	$(MCC) $(MCC_FLAGS) -B cpplib:$(LIBNAME) $(API_FILES) $(MCC_ADD_FLAGS) -d $(BUILD_DIR) 
 	@rm -f $(BUILD_DIR)/$(LIBNAME).cpp
 
 $(MEX_BUILD_DIR):
-	@mkdir -p $(MEX_BUILD_DIR)
+	@mkdir -p $(MEX_BUILD_DIR)/mex
 
-mex: $(MEX_BUILD_DIR) $(MEX_BUILD_DIR)/$(MEX_SRC).mexa64 $(MEX_ADD_OUT_FILES) 
-    
-$(MEX_BUILD_DIR)/$(MEX_SRC).mexa64: $(MEX_SRC_DIR)/$(MEX_SRC).c
+mex:  $(MEX_BUILD_DIR) $(MEX_OUT_FILES) $(MEX_ADD_OUT_FILES) 
+
+$(MEX_BUILD_DIR)/%.mexa64: %.c
 	$(MEX) $(MEX_FLAGS) -output $@ $<
 
 $(MEX_BUILD_DIR)/%.mexa64: %.cpp
@@ -70,6 +87,8 @@ clean cleanall:
 	@rm -f $(BUILD_DIR)/mccExcludedFiles.log
 	@rm -f $(BUILD_DIR)/readme.txt
 	@rm -f $(BUILD_DIR)/requiredMCRProducts.txt
+	@rm -f $(BUILD_DIR)/v2/generic_interface/$(LIBNAME).*
+	@rm -f $(BUILD_DIR)/v2/generic_interface/readme.txt
 	@rm -f $(MEX_BUILD_DIR)/*.mexa64
 	
 .PHONY: all lib clean mex
