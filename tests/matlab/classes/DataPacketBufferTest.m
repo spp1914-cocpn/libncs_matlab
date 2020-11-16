@@ -7,7 +7,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2017-2018  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2017-2020  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -32,8 +32,8 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
         packetPayload;
         packetTimestamp;
         packetId;
-        dataPacket@DataPacket;
-        dataPacket2@DataPacket;
+        dataPacket DataPacket;
+        dataPacket2 DataPacket; % implicitly 0-by-0
         
         key1;
         key2;
@@ -46,23 +46,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
         function tearDown(~)
             % required to destroy the singleton instance
             clear DataPacketBuffer;
-        end
-        
-        %% verifyErrorInvalidKey
-        function verifyErrorInvalidKey(this, func, expectedErrId, varargin)
-            invalidKey = this; % must be a scalar
-            this.verifyError(@() func(this.packetBufferUnderTest, invalidKey, varargin{:}), expectedErrId);
-            
-            invalidKey = -1; % must be positive
-            this.verifyError(@() func(this.packetBufferUnderTest, invalidKey, varargin{:}), expectedErrId);
-            
-            invalidKey = 2.5; % must be an integer
-            this.verifyError(@() func(this.packetBufferUnderTest, invalidKey, varargin{:}), expectedErrId);
-            
-            invalidKey = inf; % must be a finite value
-            this.verifyError(@() func(this.packetBufferUnderTest, invalidKey, varargin{:}), expectedErrId);
-            
-        end
+        end        
     end
        
     methods (TestMethodSetup)
@@ -82,16 +66,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
         end
     end
     
-    methods (Test)
-        
-        %% testClearInvalidKey
-        function testClearInvalidKey(this)
-            expectedErrId = 'DataPacketBuffer:Clear:InvalidKey';
-                       
-            func = @clear;
-            this.verifyErrorInvalidKey(func, expectedErrId);
-        end
-        
+    methods (Test)       
         %% testClear
         function testClear(this)
             % first, add packets for both keys
@@ -150,23 +125,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             this.verifyEqual(actualBufferedPackets(1), this.dataPacket);
             this.verifyEqual(actualBufferedPackets(2), this.dataPacket2);
         end
-        
-        %% testAddPacketInvalidPacket
-        function testAddPacketInvalidPacket(this)
-            expectedErrId = 'DataPacketBuffer:AddPacket:InvalidDataPacket';
-            
-            invalidPacket = zeros(4);
-            this.verifyError(@() this.packetBufferUnderTest.addPacket(this.key1, invalidPacket), expectedErrId);
-        end
-        
-        %% testAddPacketInvalidKey
-        function testAddPacketInvalidKey(this)
-            expectedErrId = 'DataPacketBuffer:AddPacket:InvalidKey';
                        
-            func = @addPacket;
-            this.verifyErrorInvalidKey(func, expectedErrId, this.dataPacket);
-        end
-        
         %% testAddPacketKeyNotPresent
         function testAddPacketKeyNotPresent(this)
             % initially, there should be no packet buffered for the given

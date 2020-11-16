@@ -7,7 +7,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2018-2019  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2018-2020  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -46,6 +46,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
         
         defaultInput;
         delayProbs;
+        modeTransitionMatrix;
         transmissionCosts;
         
         controller;
@@ -78,6 +79,9 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             
             this.defaultInput = ones(1, this.dimU);
             this.delayProbs = ones(this.controlSeqLength, 1) / this.controlSeqLength;
+            this.modeTransitionMatrix = Utility.calculateDelayTransitionMatrix(...
+                Utility.truncateDiscreteProbabilityDistribution(this.delayProbs, this.controlSeqLength + 1));
+            
             this.transmissionCosts = 10;
             
             this.controller = InfiniteHorizonUdpLikeController(this.A, this.B, this.C, this.Q, this.R, ...
@@ -109,16 +113,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
         end
         
         %% testNcsControllerEventBased
-        function testNcsControllerEventBased(this)
-            invalidPlantStateOrigin = ones(this.dimX); % a matrix
-            ncsController = NcsController(this.eventBasedController, this.defaultInput, invalidPlantStateOrigin);
-            
-            this.verifySameHandle(ncsController.controller, this.eventBasedController);
-            this.verifyEmpty(ncsController.plantStateOrigin);
-            this.verifyTrue(ncsController.isEventBased);
-            this.verifyEqual(ncsController.controlSequenceLength, this.controlSeqLength);
-            this.verifyEqual(ncsController.controlErrorWindowSize, 10);
-            
+        function testNcsControllerEventBased(this)            
             ncsController = NcsController(this.eventBasedController, this.defaultInput, this.plantStateOrigin);
             
             this.verifySameHandle(ncsController.controller, this.eventBasedController);
@@ -133,15 +128,14 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             ncsController = NcsController(this.controller, this.defaultInput);
             
             this.assertEqual(ncsController.controlErrorWindowSize, 10);
-            expectedErrId = 'NcsController:SetControlErrorWindowSize:InvalidWindowSize';
-                        
+                                    
             invalidSize = -1; % negative
             errorThrown = false;
             try
                 ncsController.controlErrorWindowSize = invalidSize;
             catch ex
                 errorThrown = true;
-                this.verifyEqual(ex.identifier, expectedErrId);
+                this.verifyTrue(endsWith(ex.identifier, ':mustBePositive'));
             end 
             if ~errorThrown
                this.verifyFail(); % failure 
@@ -153,7 +147,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
                 ncsController.controlErrorWindowSize = invalidSize;
             catch ex
                 errorThrown = true;
-                this.verifyEqual(ex.identifier, expectedErrId);
+                this.verifyTrue(endsWith(ex.identifier, ':UnableToConvert'));
             end 
             if ~errorThrown
                this.verifyFail(); % failure 
@@ -165,7 +159,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
                 ncsController.controlErrorWindowSize = invalidSize;
             catch ex
                 errorThrown = true;
-                this.verifyEqual(ex.identifier, expectedErrId);
+                this.verifyTrue(endsWith(ex.identifier, ':mustBeInteger'));
             end 
             if ~errorThrown
                this.verifyFail(); % failure 
@@ -187,7 +181,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             
             % check the side effect, i.e., the proper creation and initialization of the structure to
             % store the data            
-            actualStatistics = ncsController.statistics;
+            actualStatistics = ncsController.getStatistics(maxLoopSteps);
             this.verifyTrue(isfield(actualStatistics, 'numUsedMeasurements'));
             this.verifyEqual(actualStatistics.numUsedMeasurements, nan(1, maxLoopSteps));
             
@@ -229,9 +223,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             this.verifyEqual(dataPacket.destinationAddress, 1);
             this.verifyEqual(dataPacket.timeStamp, timestep);
             
-            numUsedMeas = ncsController.statistics.numUsedMeasurements(timestep);
-            numDiscardedMeas = ncsController.statistics.numDiscardedMeasurements(timestep);
-            actualControllerState = ncsController.statistics.controllerStates(:, timestep + 1);
+            [numUsedMeas, numDiscardedMeas, actualControllerState] = ncsController.getStatisticsForTimestep(timestep);
             
             this.verifyEqual(actualControllerState, plantState);
             this.verifyEqual(numUsedMeas, 0);
@@ -267,9 +259,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             
             dataPacket = ncsController.step(timestep, scPackets, acPackets, previousMode);
             
-            numUsedMeas = ncsController.statistics.numUsedMeasurements(timestep);
-            numDiscardedMeas = ncsController.statistics.numDiscardedMeasurements(timestep);
-            actualControllerState = ncsController.statistics.controllerStates(:, timestep + 1);
+            [numUsedMeas, numDiscardedMeas, actualControllerState] = ncsController.getStatisticsForTimestep(timestep);
             
             this.verifyNotEmpty(dataPacket);
             this.verifyClass(dataPacket, ?DataPacket);
@@ -313,10 +303,8 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             
             dataPacket = ncsController.step(timestep, scPackets, acPackets, previousMode);
             
-            numUsedMeas = ncsController.statistics.numUsedMeasurements(timestep);
-            numDiscardedMeas = ncsController.statistics.numDiscardedMeasurements(timestep);
-            actualControllerState = ncsController.statistics.controllerStates(:, timestep + 1);
-            
+            [numUsedMeas, numDiscardedMeas, actualControllerState] = ncsController.getStatisticsForTimestep(timestep);
+                
             this.verifyNotEmpty(dataPacket);
             this.verifyClass(dataPacket, ?DataPacket);
             
@@ -550,9 +538,9 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
         function testChangeCaDelayProbsTrue(this)
             % for the IMM-based controller, this operation is supported
             horizonlength = 5;
-            immBasedController = IMMBasedRecedingHorizonController(this.A, this.B, this.C, this.Q, this.R, this.delayProbs, ...
-                this.controlSeqLength, this.maxMeasDelay, this.W, Gaussian(zeros(this.dimY, 1), this.V), ...
-                horizonlength, zeros(this.dimX, 1), eye(this.dimX));
+            immBasedController = IMMBasedRecedingHorizonController(this.A, this.B, this.C, this.Q, this.R, ...
+                this.modeTransitionMatrix, this.controlSeqLength, this.maxMeasDelay, this.W, ...
+                Gaussian(zeros(this.dimY, 1), this.V), horizonlength, zeros(this.dimX, 1), eye(this.dimX));
             ncsController = NcsController(immBasedController, this.defaultInput);
             newDelayProbs = [this.delayProbs(:); 0];
             this.verifyTrue(ncsController.changeCaDelayProbs(newDelayProbs));

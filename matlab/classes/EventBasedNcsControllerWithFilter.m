@@ -17,7 +17,7 @@ classdef EventBasedNcsControllerWithFilter < NcsControllerWithFilter
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2018-2019  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2018-2020  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -38,14 +38,15 @@ classdef EventBasedNcsControllerWithFilter < NcsControllerWithFilter
     %    You should have received a copy of the GNU General Public License
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
     
-    properties (Access = private, Constant)
+    properties (Access = public, Constant)
         defaultDeadband = 10;
     end
     
     properties (Access = public)
         % deadband (for the deadband control strategy)
-        deadband = EventBasedNcsControllerWithFilter.defaultDeadband;
-        eventTrigger = EventBasedControllerTriggerCriterion.Sequence;
+        deadband(1,1) double {mustBeNonnegative} = EventBasedNcsController.defaultDeadband;
+        eventTrigger(1,1) EventBasedControllerTriggerCriterion ...
+            = EventBasedControllerTriggerCriterion.Sequence;
     end
     
     properties (Access = private)
@@ -54,26 +55,7 @@ classdef EventBasedNcsControllerWithFilter < NcsControllerWithFilter
     
     properties (SetAccess = immutable, GetAccess = private)
         canUpdateEtaState;
-    end
-    
-    methods
-        function set.deadband(this, newDeadband)
-            assert(Checks.isNonNegativeScalar(newDeadband), ...
-                'EventBasedNcsControllerWithFilter:SetDeadband:InvalidDeadband', ...
-                '** <newDeadband> must be a nonnegative scalar **');
-
-            this.deadband = newDeadband;
-        end
-        
-        function set.eventTrigger (this, newEventTrigger)
-            assert(isscalar(newEventTrigger) && isa(newEventTrigger, 'uint8') ...
-                && newEventTrigger <= EventBasedControllerTriggerCriterion.getMaxId(), ...
-                'EventBasedNcsControllerWithFilter:SetEventTrigger:InvalidTrigger', ...
-                '** <newEventTrigger> must be a EventBasedControllerTriggerCriterion **');
-            
-            this.eventTrigger = EventBasedControllerTriggerCriterion(newEventTrigger);
-        end
-    end
+    end  
     
     methods (Access = public)
         %% EventBasedNcsControllerWithFilter

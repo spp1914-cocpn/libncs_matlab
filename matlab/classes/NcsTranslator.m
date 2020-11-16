@@ -11,7 +11,7 @@ classdef NcsTranslator < handle
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2017-2019  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2017-2020  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -33,9 +33,9 @@ classdef NcsTranslator < handle
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
     
     properties (SetAccess = immutable, GetAccess = private)
-        qocRateCurve = [];%@fittype; % to be extended to sfit, rate = r(QoC_actual, QoC_desired)
-        controlErrorQocCurve = []; % function f: qoc=f(error)
-        maxPossibleRate;
+        qocRateCurve (1,1) fittype; % to be extended to sfit, rate = r(QoC_actual, QoC_desired)
+        controlErrorQocCurve (1,1) fittype; % function f: qoc=f(error)
+        maxPossibleRate (1,1) double {mustBePositive, mustBeFinite} = 100;
     end
     
     methods (Access = public)
@@ -60,34 +60,24 @@ classdef NcsTranslator < handle
             % 
             % Returns:
             %   << this (NcsTranslator)
-            %      A new NcsTranslator instance.
-            
-            assert(Checks.isClass(qualityRateCurve, 'fittype'), ...
-                'NcsTranslator:InvalidQualityRateCurve', ...
-                '** <qualityRateCurve> must denote a fitted curve, i.e., a cfit or sfit instance. **');            
-            assert(Checks.isClass(controlErrorQualityCurve, 'fittype'), ...
-                'NcsTranslator:InvalidControlErrorQualityCurve', ...
-                '** <controlErrorQualityCurve> must denote a fitted curve, i.e., a cfit or sfit instance. **');
-            assert(Checks.isPosScalar(maxPossibleRate) && isfinite(maxPossibleRate), ...
-                'NcsTranslator:InvalidMaxPossibleRate', ...
-                '** <maxPossibleRate> denotes a packet rate und must thus be a positive scalar. **');
-            
+            %      A new NcsTranslator instance.            
+           
             this.qocRateCurve = qualityRateCurve;
             this.controlErrorQocCurve = controlErrorQualityCurve;
             this.maxPossibleRate = maxPossibleRate;
         end
         
         %% getDataRateForQoC
-        function [rate, rateChange] = getDataRateForQoc(this, actualQoC, targetQoC)
+        function [rate, rateChange] = getDataRateForQoc(this, actualQoc, targetQoc)
             % Get the data rate required to reach a target control performance (QoC) given an actual QoC
             % according to the underlying communication characteristics (i.e., the model relating data rate and control performance).
             %
             % Parameters:
-            %   >> actualQoC (Nonnegative scalar)
+            %   >> actualQoc (Nonnegative scalar)
             %      The current actual QoC of the NCS (or the controller's estimate thereof), given in terms of a
             %      value in [0,1].
             %
-            %   >> targetQoC (Nonnegative scalar)
+            %   >> targetQoc (Nonnegative scalar)
             %      The desired QoC of the NCS, given in terms of a
             %      value in [0,1].
             %
@@ -103,8 +93,14 @@ classdef NcsTranslator < handle
             %      model with regards to the target QoC, evaluated at the
             %      given value.
             
+            arguments
+                this
+                actualQoc(1,1) double {mustBeGreaterThanOrEqual(actualQoc, 0), mustBeLessThanOrEqual(actualQoc, 1)}
+                targetQoc(1,1) double {mustBeGreaterThanOrEqual(targetQoc, 0), mustBeLessThanOrEqual(targetQoc, 1)}
+            end
+            
             % so far, the curve is static
-            rate = this.qocRateCurve(targetQoC);
+            rate = this.qocRateCurve(targetQoc);
                        
             %normalize rate: nonnegative and <= maxPossibleRate packets per second
             rate = min(max(0, rate), this.maxPossibleRate);
@@ -112,7 +108,7 @@ classdef NcsTranslator < handle
             if nargout == 2
                 % differentiate with regards to targetQoC (i.e., partial
                 % derivative)
-                rateChange = differentiate(this.qocRateCurve, targetQoC);
+                rateChange = differentiate(this.qocRateCurve, targetQoc);
             end
         end
         
@@ -122,7 +118,7 @@ classdef NcsTranslator < handle
             % according to the underlying communication characteristics (i.e., the model relating data rate and control performance).
             %
             % Parameters:
-            %   >> actualQoC (Nonnegative scalar)
+            %   >> actualQoc (Nonnegative scalar)
             %      The current actual QoC of the NCS (or the controller's estimate thereof), given in terms of a
             %      value in [0,1].
             %
@@ -133,20 +129,38 @@ classdef NcsTranslator < handle
             %   << qoc (Nonnegative scalar)
             %      The QoC that can be achieved given the values of actual QoC and desired data rate,
             %      computed based on the underlying communication characteristics of the NCS.
-             
+           
+            arguments
+                this
+                actualQoc(1,1) double {mustBeGreaterThanOrEqual(actualQoc, 0), mustBeLessThanOrEqual(actualQoc, 1)}
+                targetRate(1,1) double {mustBeNonnegative}
+            end
+                        
             % we want the QoC value that can be achieved with the given rate
             % when the current actual QoC is known
             
             % so far, the curve is static, independent of actualQoC
-            x0 = 0.5;
-            % numerically, find the inverse (translation into root finding problem)
-            qoc = fzero(@(x) this.qocRateCurve(x) - targetRate, x0);
+            % check if we have to clamp
+            if this.qocRateCurve(0) > targetRate
+                qoc = 0;
+            elseif this.qocRateCurve(1) < targetRate
+                qoc = 1;
+            else
+                % numerically, find the inverse (translation into root finding problem)
+                % there must be a zero (root) of qocRateCurve(x)-y within
+                % [0,1]
+                qoc = fzero(@(x) this.qocRateCurve(x) - targetRate, [0 1]);
+            end
             % clamp to ensure that return value is nonnegative
-            qoc = max(0, qoc);
+            %qoc = max(0, qoc);
         end
         
         %% translateControlError
         function qoc = translateControlError(this, controlError)
+            arguments
+                this
+                controlError(1,1) double {mustBeNonnegative}
+            end
             % qoc is in unit interval [0,1]
             qoc = min(1, max(this.controlErrorQocCurve(controlError), 0));
         end

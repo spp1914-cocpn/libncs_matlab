@@ -1,4 +1,4 @@
-function [costs, stats] = ncs_finalize(ncsHandle)
+function [costs, controllerStats, plantStats] = ncs_finalize(ncsHandle)
     % Finish a control task (NCS simulation) in Matlab and clean up resources.
     %
     % Parameters:
@@ -9,21 +9,27 @@ function [costs, stats] = ncs_finalize(ncsHandle)
     %   << costs (Nonnegative scalar)
     %      The accrued costs according to the controller's underlying cost functional.
     %
-    %   << stats (Struct)
-    %     Struct containing statistical data gathered during the execution
+    %   << controllerStats (Struct)
+    %     Struct containing control-related data gathered during the execution
     %     of the control task. At least the following fields are present:
     %     -numUsedMeasurements (Row vector of nonnegative integers), indicating the number
     %     of measurements that have been used by the controller/estimator at each time step
     %     -numDiscardedMeasurements (Row vector of nonnegative integers), indicating the number
     %     of measurements that have been discarded by the controller/estimator at each time step
-    %     -appliedInputs (Matrix), 
-    %     containing the actually applied control inputs per time step
-    %     -trueStates (Matrix), 
-    %     containing the true plant states per time step
     %     -controllerStates (Matrix), 
     %     containing the plant states kept by the controller per time step
     %     -numDiscardedControlSequences (Row vector of nonnegative integers), indicating the number
     %     of received control sequences that have been discarded by the actuator at each time step
+    %
+    %   << plantStats (Struct)
+    %     Struct containing plant-related data gathered during the execution
+    %     of the control task. At least the following fields are present:
+    %     -appliedInputs (Matrix), 
+    %     containing the actually applied control inputs per time step (time step w.r.t
+    %     plant sampling rate)
+    %     -trueStates (Matrix), 
+    %     containing the true plant states per time step (time step w.r.t
+    %     plant sampling rate)  
     
     %    This program is free software: you can redistribute it and/or modify
     %    it under the terms of the GNU General Public License as published by
@@ -42,13 +48,14 @@ function [costs, stats] = ncs_finalize(ncsHandle)
 
     ncsStats = ncs.getStatistics();
     costs = ncs.computeTotalControlCosts();
-    stats.numUsedMeasurements = ncsStats.numUsedMeasurements;
-    stats.numDiscardedMeasurements = ncsStats.numDiscardedMeasurements;
-    stats.trueStates = ncsStats.trueStates;
-    stats.controllerStates = ncsStats.controllerStates;
-    stats.appliedInputs = ncsStats.appliedInputs;
-    stats.numDiscardedControlSequences = ncsStats.numDiscardedControlSequences;        
-   
+    controllerStats.numUsedMeasurements = ncsStats.numUsedMeasurements;
+    controllerStats.numDiscardedMeasurements = ncsStats.numDiscardedMeasurements;
+    controllerStats.numDiscardedControlSequences = ncsStats.numDiscardedControlSequences;        
+    controllerStats.controllerStates = ncsStats.controllerStates;
+    
+    plantStats.trueStates = ncsStats.trueStates;
+    plantStats.appliedInputs = ncsStats.appliedInputs;
+      
     ComponentMap.getInstance().removeComponentByIndex(ncsHandle);
 end
 

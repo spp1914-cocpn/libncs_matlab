@@ -16,7 +16,7 @@ classdef EventBasedNcsSensor < NcsSensor
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2018  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2018-2020  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -37,29 +37,19 @@ classdef EventBasedNcsSensor < NcsSensor
     %    You should have received a copy of the GNU General Public License
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
     
-    properties (Access = private, Constant)
+    properties (Access = public, Constant)
         defaultMeasurementDelta = 10;
     end
     
     properties (Access = public)
         % measurements delta (for the send-on-delta strategy)
-        measurementDelta = EventBasedNcsSensor.defaultMeasurementDelta;
+        measurementDelta(1,1) double {mustBeNonnegative} = EventBasedNcsSensor.defaultMeasurementDelta;
     end
     
     properties (Access = private)
         % previously sent measurement
         lastSentMeasurement;
-    end
-    
-    methods
-        function set.measurementDelta(this, newMeasurementDelta)
-            assert(Checks.isNonNegativeScalar(newMeasurementDelta), ...
-                'EventBasedNcsSensor:SetMeasurementDelta:InvalidDelta', ...
-                '** <newMeasurementDelta> must be a nonnegative scalar **');
-
-            this.measurementDelta = newMeasurementDelta;
-        end
-    end
+    end   
     
     methods (Access = public)
         %% EventBasedNcsSensor

@@ -1,13 +1,13 @@
 classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             'libncs_matlab/matlab', 'IncludingSubfolders', true)}) ...
-        NcsDoHandlePacketTest < matlab.unittest.TestCase
-    % Test cases for the api function ncs_doHandlePacket.
+        NcsGetPlantTickerIntervalTest < matlab.unittest.TestCase
+    % Test cases for the api function ncs_getPlantTickerInterval.
     
     % >> This function/class is part of CoCPN-Sim
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2018-2020 Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2018-2020  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -31,25 +31,17 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
     properties (Access = private)
         ncs;
         ncsHandle;
-        tickerInterval;
-        
-        timestamp;
-        packetId;
-        payload;
-        dataPacket;
+        plantTickerInterval;
         
         componentMap;
-        packetBuffer;
     end
     
     methods (Access = private)
         %% tearDown
         function tearDown(this)
             this.componentMap.clear();
-            this.packetBuffer.clearAll();
             % required to destroy the singleton instance
             clear ComponentMap;
-            clear DataPacketBuffer;
         end
     end
     
@@ -83,20 +75,15 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             
             controller = NominalPredictiveController(A, B, Q, R, controlSeqLength);
             controllerSubsystem = NcsControllerWithFilter(controller, filter, ...
-                filterPlantModel, sensor, zeros(dimU, 1), [1/4 1/4 1/4 1/4]');            
+                filterPlantModel, sensor, zeros(dimU, 1), [1/4 1/4 1/4 1/4]');
             
-            this.componentMap = ComponentMap.getInstance();    
-            this.packetBuffer = DataPacketBuffer.getInstance();
-            this.tickerInterval = .2; % 0.2s
+            this.componentMap = ComponentMap.getInstance();            
+            this.plantTickerInterval = .002; % 0.002s
+            loopTickerInterval = .1; % 0.1s for the controller
             this.ncs = NetworkedControlSystem(controllerSubsystem, plantSubsystem, sensorSubsystem, ...
-                'NCS', this.tickerInterval, NetworkType.TcpLike);
+                'NCS', loopTickerInterval, this.plantTickerInterval, NetworkType.TcpLike);
             this.ncsHandle = this.componentMap.addComponent(this.ncs);
-            
-            this.timestamp = 2;
-            this.payload = 42;
-            this.packetId = 10;
-            this.dataPacket = DataPacket(this.payload, this.timestamp, this.packetId);
-            
+
             this.addTeardown(@tearDown, this);
         end
     end
@@ -107,26 +94,26 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             expectedErrId = 'ComponentMap:InvalidComponentType';
             
             invalidHandle = this.componentMap.addComponent(this); % invalid type
-            this.verifyError(@() ncs_doHandlePacket(invalidHandle, this.timestamp, this.dataPacket), expectedErrId);
+            this.verifyError(@() ncs_getPlantTickerInterval(invalidHandle), expectedErrId);
             
             expectedErrId = 'ComponentMap:InvalidIndex';
             
             invalidHandle = this.ncsHandle + 2; % not a valid index
-            this.verifyError(@() ncs_doHandlePacket(invalidHandle, this.timestamp, this.dataPacket), expectedErrId);
-        end        
+            this.verifyError(@() ncs_getPlantTickerInterval(invalidHandle), expectedErrId);
+        end
         
         %% test
         function test(this)
-            this.assertEmpty(this.packetBuffer.getDataPackets(this.ncsHandle));
+            import matlab.unittest.constraints.IsScalar
             
-            packetsOut = ncs_doHandlePacket(this.ncsHandle, this.timestamp, this.dataPacket);
-            bufferedPackets = this.packetBuffer.getDataPackets(this.ncsHandle);
+            expectedTickerInterval = this.plantTickerInterval * 1e12; % in pico-seconds
+            actualTickerInterval = ncs_getPlantTickerInterval(this.ncsHandle);
             
-            % no packets shall be returned
-            this.verifyEmpty(packetsOut);
-            % validate the side effect: packet should be stored in buffer
-            this.verifySize(bufferedPackets, [1 1]);
-            this.verifyEqual(bufferedPackets(1), this.dataPacket);
+            % also check that returned values is a scalar and double
+            this.verifyThat(actualTickerInterval, IsScalar);
+            this.verifyClass(actualTickerInterval, ?double);            
+            
+            this.verifyEqual(actualTickerInterval, expectedTickerInterval);
         end
     end
 end

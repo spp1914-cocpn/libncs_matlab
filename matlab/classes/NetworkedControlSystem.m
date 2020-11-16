@@ -6,7 +6,7 @@ classdef NetworkedControlSystem < handle
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2017-2019  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2017-2020  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -28,18 +28,35 @@ classdef NetworkedControlSystem < handle
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
     
     properties (GetAccess = public, SetAccess = immutable)
-        name;
-        samplingInterval; % in seconds, all components are clock-synchronous
-        networkType@NetworkType;
-        sensor@NcsSensor;
-        controller@NcsController;
-        plant@NcsPlant;
+        name = 'NCS';        
+        plantSamplingInterval(1,1) double {mustBePositive} = NetworkedControlSystem.defaultPlantSamplingTime;
+        networkType NetworkType = NetworkType.UdpLikeWithAcks;
+        sensor NcsSensor;
+        controller NcsController;
+        plant NcsPlant;
     end
     
-    properties (Access = private)
-        plantState;
-        plantMode;       
-        translator@NcsTranslator;
+    properties (GetAccess = public, SetAccess = private)
+        % controller can change sampling rate during runtime
+        samplingInterval(1,1) double {mustBePositive} = NetworkedControlSystem.defaultSamplingTime; % in seconds, all components are clock-synchronous
+    end
+    
+    properties (Access = private)        
+        translator NcsTranslator;
+        lastPlantInvocationTime; % stores the last point in time (in pico-seconds) the plant was triggered from Omnet
+        lastControllerInvocationTime; % stores the last point in (in pico-seconds) the controller/actuator was triggered from Omnet
+        lastControllerTimestep = 0; % store the time step corresponding to the last invocation time, needed to keep track of since controller can adapt sampling rate
+        
+        interpolatedPlantStates;
+        inputs;
+        plantMode; % updated periodically, when actuator is triggered
+        
+        avgEstimatedControlError(1,1) double = 0;
+        avgActualControlError(1,1) double = 0;        
+        
+        lastEstimatedControlError(1,1) double = 0;
+        lastActualControlError(1,1) double =0;
+        numControlErrorSamples(1,1) double = 0;      
     end
     
     properties (Dependent, GetAccess = public)
@@ -49,6 +66,7 @@ classdef NetworkedControlSystem < handle
     properties (Constant, Access = private)
          % which is a frequency of 10 Hz
         defaultSamplingTime = 0.1;
+        defaultPlantSamplingTime = 0.001; % 1 kHz
     end
     
     methods
@@ -59,7 +77,7 @@ classdef NetworkedControlSystem < handle
        
     methods (Access = public)
         %% NetworkedControlSystem
-        function this = NetworkedControlSystem(controller, plant, sensor, name, samplingInterval, networkType)
+        function this = NetworkedControlSystem(controller, plant, sensor, name, samplingInterval, plantSamplingInterval, networkType)
             % Class constructor.
             %
             % Parameters:
@@ -72,12 +90,16 @@ classdef NetworkedControlSystem < handle
             %   >> plant (NcsSensor)
             %      The sensor of the NCS.
             %
-            %   >> name (optional)
+            %   >> name
             %      Name or identifier for NCS.
             %
-            %   >> samplingInterval (Positive Scalar, optional)
+            %   >> samplingInterval (Positive Scalar)
             %      A positive scalar denoting the sampling interval (in
-            %      seconds) of the NCS. If none is passed, 0.1 is used.
+            %      seconds) of the NCS (controller, actuator and sensor). If none is passed, 0.1 is used.
+            %
+            %   >> plantSamplingInterval (Positive Scalar, optional)
+            %      A positive scalar denoting the sampling interval (in
+            %      seconds) of the plant. If none is passed, 0.001 is used.
             %
             %   >> networkType (NetworkType, optional)
             %      A constant from the enumeration describing the network
@@ -88,34 +110,22 @@ classdef NetworkedControlSystem < handle
             % Returns:
             %   << this (NetworkedControlSystem)
             %      A new NetworkedControlSystem instance.
-            switch nargin
-                case 3
-                    name = 'NCS';
-                    samplingInterval = NetworkedControlSystem.defaultSamplingTime;
-                    networkType = NetworkType.UdpLikeWithAcks;
-                case 4
-                    samplingInterval = NetworkedControlSystem.defaultSamplingTime;
-                    networkType = NetworkType.UdpLikeWithAcks;
-                case 5
-                    assert(Checks.isPosScalar(samplingInterval), ...
-                        'NetworkedControlSystem:InvalidSamplingInterval', ...
-                        '** <samplingInterval> must be a positive scalar. **');
-                    networkType = NetworkType.UdpLikeWithAcks;
+            
+            if nargin > 4
+                this.samplingInterval = samplingInterval;
+            end            
+            if nargin > 5
+                this.plantSamplingInterval = plantSamplingInterval;
             end
+            if nargin > 6
+                this.networkType = networkType;
+            end            
+            this.name = name;
             this.controller = controller;
             this.plant = plant;
             this.sensor = sensor;
-            this.name = name;
-            this.samplingInterval = samplingInterval;
-            if isa(networkType, 'NetworkType')
-                this.networkType = networkType;
-            else
-                assert(isscalar(networkType) && isinteger(networkType) ...
-                        && networkType > 0 && networkType <= NetworkType.getMaxId(), ...
-                    'NetworkedControlSystem:InvalidNetworkType', ...
-                    '** <networkType> must be a NetworkType **');
-                this.networkType = NetworkType(uint8(networkType));
-            end
+            
+            this.plantMode = this.controlSequenceLength + 1;            
         end
         
         %% attachTranslator
@@ -196,14 +206,12 @@ classdef NetworkedControlSystem < handle
             assert(isnumeric(state) && isvector(state) && length(state) == this.plant.dimState && all(isfinite(state)), ...
                 'NetworkedControlSystem:InitPlant', ...
                 '** Cannot init plant: State must be a real-valued %d-dimensional vector or distribution **', this.plant.dimState);
-            % store as column vector
-            this.plantState = state(:);
-            % also, set the initial true mode (maxMode)
-            this.plantMode = this.controlSequenceLength + 1;%1; 
+            
+            this.plant.init(state(:));            
         end
         
         %% initStatisticsRecording
-        function initStatisticsRecording(this, maxLoopSteps)
+        function initStatisticsRecording(this, maxSimTime)
             % Initialize the recording of data to be gathered at each
             % time step, which are: true state, true mode, applied input,
             % number of used measurements, number of discarded
@@ -213,73 +221,67 @@ classdef NetworkedControlSystem < handle
             % time steps and the initial data (at k=0) are recorded.
             %
             % Parameters:
-            %   >> maxLoopSteps (Positive integer)
-            %      The maximum number of simulation time steps.
-            %
+            %   >> maxSimTime (Positive Scalar)
+            %      A positive scalar denoting the maximum simulation time in pico-seconds. 
             
-            assert(Checks.isPosScalar(maxLoopSteps) && mod(maxLoopSteps, 1) == 0, ...
-                'NetworkedControlSystem:InitStatisticsRecording', ...
-                '** Cannot init recording of statistics: <maxLoopSteps> must be a positive integer **');
+            arguments
+                this
+                maxSimTime(1,1) {mustBeNumeric, mustBePositive, mustBeInteger}
+            end 
             
-            this.controller.initStatisticsRecording(maxLoopSteps, this.plant.dimState);
-            this.plant.initStatisticsRecording(maxLoopSteps, this.plantState, this.plantMode);
+            % controller can adapt its sampling rate, so the following is a
+            % mere educated guess
+            maxControllerSteps = floor(ConvertToSeconds(double(maxSimTime)) / this.samplingInterval);
+            maxPlantSteps = floor(ConvertToSeconds(double(maxSimTime)) / this.plantSamplingInterval);
+      
+            % controller and actuator are synchronized
+            this.controller.initStatisticsRecording(maxControllerSteps, this.plant.dimState);
+            this.plant.initStatisticsRecording(maxPlantSteps, maxControllerSteps);
+            
+            this.interpolatedPlantStates = nan(this.plant.dimState, maxControllerSteps + 1);
+            this.interpolatedPlantStates(:, 1) = this.plant.getInitialPlantState();            
+            this.inputs = nan(this.plant.dimInput, maxControllerSteps);
         end
         
         %% getStatistics
         function statistics = getStatistics(this)
-            % Get the statistical data that has been recorded.
+            % Get the statistical data that has been recorded during a
+            % simulation run.
             %
             % Returns:
             %   << statistics (Struct)
             %      The statistical data.
             %
             
-            statistics = this.plant.statistics;
-            if ~isempty(statistics)
-                fields = fieldnames(this.controller.statistics);
-                for i=1:length(fields)
-                    f = fields{i};
-                    if ~isfield(statistics, f)
-                        statistics.(f) = this.controller.statistics.(f);
-                    end   
-                end 
+            statistics = this.plant.getStatistics(this.lastControllerTimestep);
+            controllerStats = this.controller.getStatistics(this.lastControllerTimestep);            
+            fields = fieldnames(controllerStats);
+            for i=1:length(fields)
+                statistics.(fields{i}) = controllerStats.(fields{i});
             end
         end
         
         %% getStageCosts
-        function currentStageCosts = getStageCosts(this, timestep)
-            % Get the current stage costs for the given plant
-            % true state.
-            %
-            % Parameters:
-            %   >> timestep (Positive integer)
-            %      The current time step, i.e., the integer yielding the
-            %      current simulation time (in s) when multiplied by the
-            %      loop's sampling interval.
+        function currentStageCosts = getCurrentStageCosts(this)
+            % Get the true stage costs for the current controller time step.            
             %
             % Returns:
             %   << stageCosts (Nonnegative scalar)
             %      The current stage costs according to the controller's underlying cost functional.
             
-            if isempty(this.plantState)
-                % happens only if plant was not (yet) initialized
+            if isempty(this.lastPlantInvocationTime) || isempty(this.lastControllerInvocationTime)
                 currentStageCosts = 0;
+            
             else
                 % use stored x_k and u_k
-                currentStageCosts = this.controller.getCurrentStageCosts(this.plant.statistics.trueStates(:, timestep + 1), ...
-                    this.plant.statistics.appliedInputs(:, timestep), timestep);
+                currentStageCosts = this.controller.getCurrentStageCosts(this.interpolatedPlantStates(:, this.lastControllerTimestep + 1), ...
+                    this.inputs(:, this.lastControllerTimestep), this.lastControllerTimestep); 
             end
         end
         
         %% getQualityOfControl
-        function [actualQoc, estimatedQoc] = getQualityOfControl(this, timestep)
+        function [actualQoc, estimatedQoc] = getCurrentQualityOfControl(this)
             % Get the current quality of control (QoC), which is an application specific measure of the control performance.
-            %
-            % Parameters:
-            %   >> timestep (Positive integer)
-            %      The current time step, i.e., the integer yielding the
-            %      current simulation time (in s) when multiplied by the
-            %      loop's sampling interval.
             %
             % Returns:
             %   << actualQoc (Nonnegative scalar)
@@ -294,27 +296,20 @@ classdef NetworkedControlSystem < handle
             %      In general, the returned value is nonnegative and such
             %      that large a value corresponds to a high control performance.
             
-            if isempty(this.plantState) || isempty(this.translator)
+            if isempty(this.lastPlantInvocationTime) || isempty(this.lastControllerInvocationTime)...
+                    || isempty(this.translator)
                 actualQoc = 0;
                 estimatedQoc = 0;
-            else           
-                [estimatedError, actualError] ...
-                    = this.controller.getCurrentControlError(timestep, this.plant.statistics.trueStates(:, 1:timestep+1));
+            else
                 % qoc is in unit interval [0,1]
-                actualQoc = this.translator.translateControlError(actualError);
-                estimatedQoc = this.translator.translateControlError(estimatedError);
+                actualQoc = this.translator.translateControlError(this.avgActualControlError);
+                estimatedQoc = this.translator.translateControlError(this.avgEstimatedControlError);
             end
         end
         
         %% getControlError
-        function [actualError, estimatedError] = getControlError(this, timestep)
+        function [actualError, estimatedError] = getCurrentControlError(this)
             % Get the current control error.
-            %
-            % Parameters:
-            %   >> timestep (Positive integer)
-            %      The current time step, i.e., the integer yielding the
-            %      current simulation time (in s) when multiplied by the
-            %      loop's sampling interval.
             %
             % Returns:
             %   << actualError (Nonnegative scalar)
@@ -329,31 +324,29 @@ classdef NetworkedControlSystem < handle
             %      the accumulated norm of the deviation from the reference
             %      output or setpoint at times k, k-1, ..., k-9.
                        
-            if isempty(this.plantState)
+            if isempty(this.lastPlantInvocationTime) || isempty(this.lastControllerInvocationTime)
                 actualError = 0;
                 estimatedError = 0;
-            else           
-                [estimatedError, actualError] ...
-                    = this.controller.getCurrentControlError(timestep, this.plant.statistics.trueStates(:, 1:timestep+1));
+            else
+                estimatedError = this.lastEstimatedControlError;
+                actualError = this.lastActualControlError;
             end
         end        
         
         %% isPlantStateAdmissible
-        function admissible = isPlantStateAdmissible(this, timestep)
+        function admissible = isPlantStateAdmissible(this)
             % Get whether the current plant state is admissible (e.g., does not violate constraints).
-            %
-            % Parameters:
-            %   >> timestep (Positive integer)
-            %      The current time step, i.e., the integer yielding the
-            %      current simulation time (in s) when multiplied by the
-            %      loop's sampling interval.
             %
             % Returns:
             %   << admissible (Logical scalar i.e., a flag)
             %      True in case the current plant state is admissible,
             %      false otherwise.
-                       
-            admissible = this.plant.isStateAdmissible(this.plant.statistics.trueStates(:, timestep+1));
+            
+            if isempty(this.lastPlantInvocationTime)
+                admissible = true;
+            else
+                admissible = this.plant.isStateAdmissible();
+            end
         end
         
         %% computeTotalControlCosts
@@ -363,14 +356,21 @@ classdef NetworkedControlSystem < handle
             %
             % Returns:
             %   << costs (Nonnegative scalar)
-            %      The accrued costs according to the cost functional of the employed controller.
-                        
-            costs = this.controller.computeCosts(this.plant.statistics.trueStates, this.plant.statistics.appliedInputs);
+            %      The accrued costs according to the cost functional of the employed controller.                     
+            
+            costs = this.controller.computeCosts(this.interpolatedPlantStates, this.inputs);
+        end
+        
+        %% plantStep
+        function plantStep(this, timestamp)     
+            
+            this.plant.plantStep(this.getPlantTimestep(timestamp));              
+            this.lastPlantInvocationTime = timestamp;
         end
         
         %% step
-        function [controllerActuatorPacket, sensorControllerPacket, controllerAck] ...
-                = step(this, timestep, scPackets, caPackets, acPackets)
+        function [controllerActuatorPacket, sensorControllerPacket, controllerAcks] ...
+                = step(this, timestamp, scPackets, caPackets, acPackets)
             % Execute a single time-triggered control cycle as described on
             % pages 36-37 in: 
             %   Jörg Fischer,
@@ -379,10 +379,9 @@ classdef NetworkedControlSystem < handle
             %   KIT Scientific Publishing, 2015.
             %
             % Parameters:
-            %   >> timestep (Positive integer)
-            %      The current time step, i.e., the integer yielding the
-            %      current simulation time (in s) when multiplied by the
-            %      loop's sampling interval.
+            %   >> timestamp (Positive integer)
+            %      The current simulation time (in Omnet), in pico-seconds,
+            %      being an integer multiple of the sampling interval.
             %     
             %   >> scPackets (Array of DataPackets, might be empty)
             %      An array of DataPackets containing measurements taken and transmitted from the sensor.
@@ -404,13 +403,31 @@ classdef NetworkedControlSystem < handle
             %      The data packet containing the measurement to be transmitted to the controller.
             %      Empty matrix is returned in case none is taken or to be transmitted (e.g., when the sensor is event-based).
             %
-            %   << controllerAck (Empty matrix or DataPacket)
-            %      The ACK for the DataPacket within the given caPackets that has
-            %      become active. An empty matrix is returned in case none
-            %      became active.
-
+            %   << controllerAcks (Empty matrix or column vector of DataPackets)
+            %      The actuator creates an acknowledgment packet for each
+            %      received control sequence in case the underlying network
+            %      type is UdpLikeWithAcks. Empty in case TcpLike or UdpLike
+            %      network type is used.
+            
+            %controllerTimestep = this.getTimestep(timestamp)
+            controllerTimestep = this.lastControllerTimestep + 1;
+            portion = (double(timestamp) - this.lastPlantInvocationTime) / ConvertToPicoseconds(this.plantSamplingInterval);
+            
+            if ~Checks.isScalarIn(portion, 0,1)
+                warning('NetworkedControlSystem:Step:StrangePortion', ...
+                    '** This should not happen to often: value of <portion> was %f **', portion);
+            end
+            
+            % get the current plant input, which is simply the one used at
+            % the last plant step (piecewise constant inputs applied)
+            lastPlantTimeStep = this.getPlantTimestep();
+            [~, actualInput] = this.plant.getPlantStatsForTimestep(lastPlantTimeStep); % u_k
+            this.inputs(:, controllerTimestep) = actualInput; 
+            
+            interpolatedState = this.plant.getInterpolatedPlantState(lastPlantTimeStep, portion);
+            this.interpolatedPlantStates(:, controllerTimestep + 1) = interpolatedState;            
             % take a measurement y_k
-            sensorControllerPacket = this.sensor.step(timestep, this.plantState);
+            sensorControllerPacket = this.sensor.step(controllerTimestep, interpolatedState);
                                    
             % do not pass the previous plant mode to the controller unless
             % network is TCP-like
@@ -419,18 +436,41 @@ classdef NetworkedControlSystem < handle
                  previousMode = this.plantMode;
             end
             
-            controllerActuatorPacket = this.controller.step(timestep, scPackets, acPackets, previousMode);         
+            % set the packet delays
+            for p = scPackets
+                p.packetDelay = controllerTimestep - p.timeStamp;
+            end
+            for p = acPackets
+                p.packetDelay = controllerTimestep - p.timeStamp;
+            end
+            for p = caPackets
+                p.packetDelay = controllerTimestep - p.timeStamp;
+            end
             
-            [controllerAck, this.plantMode, newPlantState] ...
-                = this.plant.step(timestep, caPackets, this.plantState);
-             
-            if ~this.networkType.sendOutAck()
-                controllerAck = [];
-            end     
-                                    
-            this.plantState = newPlantState;
+            controllerActuatorPacket = this.controller.step(controllerTimestep, scPackets, acPackets, previousMode);         
+                              
+            %this.plantState = newPlantState;
+            [this.plantMode, controllerAcks] = this.plant.actuatorStep(controllerTimestep, caPackets, this.networkType.sendOutAck());             
+            
+            this.lastControllerInvocationTime = timestamp;
+            this.lastControllerTimestep = this.lastControllerTimestep + 1;
+            
+            % compute the most current control error (actual and perceived value)
+            [this.lastEstimatedControlError, this.lastActualControlError] ...
+                = this.controller.getCurrentControlError(this.lastControllerTimestep, ...
+                        this.interpolatedPlantStates(:, 1:this.lastControllerTimestep+1));
+            
+            if ConvertToSeconds(timestamp) > 10 % hardcoded
+                % contributes to the average values
+                N = this.numControlErrorSamples + 1;               
+                
+                this.avgActualControlError = ((N-1) * this.avgActualControlError + this.lastActualControlError) / N;
+                this.avgEstimatedControlError = ((N-1) * this.avgEstimatedControlError + this.lastEstimatedControlError) / N;
+                
+                this.numControlErrorSamples = N;
+            end
         end
-       
+        
         %% changeControllerSequenceLength
         function success = changeControllerSequenceLength(this, newSequenceLength)
             % Change the length of the control sequence used by the
@@ -473,9 +513,56 @@ classdef NetworkedControlSystem < handle
                         
             success = this.controller.changeCaDelayProbs(newCaDelayProbs);
         end
+        
+        %% changeControllerSamplingInterval
+        function success = changeControllerSamplingInterval(this, newSamplingInterval)
+            success = false;
+            if newSamplingInterval ~= this.samplingInterval
+                % check the plant, so far only InvertedPendulum is
+                % supported
+                if Checks.isClass(this.plant.plant, 'InvertedPendulum')
+                    % we have to adapt the linearization
+                    % measurement matrix C does not change
+                    [A_new, B_new, ~, W_new] = this.plant.plant.linearizeAroundUpwardEquilibrium(newSamplingInterval);
+                    success = this.controller.changeModelParameters(A_new, B_new, W_new, []);
+                end
+            end
+            if success
+                this.samplingInterval = newSamplingInterval;
+            end
+        end
     end
     
     methods(Access = private)        
+        
+        %% getPlantTimestep
+        function plantTimestep = getPlantTimestep(this, timestamp)
+            if nargin == 1
+                plantTimestep = round(this.lastPlantInvocationTime / ConvertToPicoseconds(this.plantSamplingInterval));
+            else
+                % we are given a timestamp (in pico-seconds)
+                % functions are triggered periodically during simulations,
+                % so given timestamp should always be an integer multiple
+                % of the plant sampling interval (in practice, it might not
+                % be due to numerical issues and weird sampling frequencies such as 95 Hz)
+                plantTimestep = round(timestamp / ConvertToPicoseconds(this.plantSamplingInterval));
+            end
+        end
+        
+        %% getTimestep
+        function timestep = getTimestep(this, timestamp)
+            if nargin == 1
+                timestep = round(this.lastControllerInvocationTime / ConvertToPicoseconds(this.samplingInterval));
+            else
+                % we are given a timestamp (in pico-seconds)
+                % functions are triggered periodically during simulations,
+                % so given timestamp should always be an integer multiple
+                % of the sampling interval (in practice, it might not
+                % be due to numerical issues and weird sampling frequencies such as 95 Hz)
+                timestep = round(timestamp / ConvertToPicoseconds(this.samplingInterval));
+            end
+        end
+        
         %% checkSensor
         function checkSensor(this)
             assert(~isempty(this.sensor), ...

@@ -7,7 +7,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2018-2019  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2018-2020  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -86,7 +86,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
                 this.controlSeqLength + 1, this.maxMeasDelay, this.delayWeights);
             
             this.controller = NominalPredictiveController(this.A, this.B, this.Q, this.R, this.controlSeqLength);
-            this.filter = DelayedKF(this.maxMeasDelay);
+            this.filter = DelayedKF(this.maxMeasDelay, eye(this.controlSeqLength + 1));
         end
     end
     
@@ -123,10 +123,17 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             
             plantState = zeros(this.dimX, 1);
             controllerState = Gaussian(plantState, eye(this.dimX));
-            this.filter.setState(controllerState);
             
-            ncsController = NcsControllerWithFilter(this.controller, this.filter, ...
-                this.filterPlantModel, this.filterSensorModel, this.defaultInput, this.initialCaDelayDistribution);
+            modePlantModels = arrayfun(@(~) LinearPlant(this.A, this.B, this.W), 1:this.controlSeqLength + 1, ...
+                'UniformOutput', false);                                   
+            jumpLinearPlantModel = JumpLinearSystemModel(this.controlSeqLength + 1, modePlantModels);
+            modeFilters = arrayfun(@(mode) EKF(sprintf('KF for mode %d', mode)), 1:this.controlSeqLength + 1, ...
+                'UniformOutput', false);
+            ineptFilter = DelayedIMMF(modeFilters, eye(this.controlSeqLength + 1), this.maxMeasDelay);
+            ineptFilter.setState(controllerState);
+            
+            ncsController = NcsControllerWithFilter(this.controller, ineptFilter, ...
+                jumpLinearPlantModel, this.filterSensorModel, this.defaultInput, this.initialCaDelayDistribution);
                         
             acPackets = [];
             scPackets = [];
@@ -152,9 +159,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             
             dataPacket = ncsController.step(timestep, scPackets, acPackets, previousMode);
             
-            numUsedMeas = ncsController.statistics.numUsedMeasurements(timestep);
-            numDiscardedMeas = ncsController.statistics.numDiscardedMeasurements(timestep);
-            actualControllerState = ncsController.statistics.controllerStates(:, timestep + 1);
+            [numUsedMeas, numDiscardedMeas, actualControllerState] = ncsController.getStatisticsForTimestep(timestep);
                         
             this.verifyNotEmpty(dataPacket);
             this.verifyClass(dataPacket, ?DataPacket);
@@ -198,10 +203,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             
             dataPacket = ncsController.step(timestep, scPackets, acPackets, previousMode);
             
-            numUsedMeas = ncsController.statistics.numUsedMeasurements(timestep);
-            numDiscardedMeas = ncsController.statistics.numDiscardedMeasurements(timestep);
-            actualControllerState = ncsController.statistics.controllerStates(:, timestep + 1);
-            
+            [numUsedMeas, numDiscardedMeas, actualControllerState] = ncsController.getStatisticsForTimestep(timestep);
             
             this.verifyNotEmpty(dataPacket);
             this.verifyClass(dataPacket, ?DataPacket);
@@ -246,11 +248,8 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
 
             dataPacket = ncsController.step(timestep, scPackets, acPackets, previousMode);
             
-            numUsedMeas = ncsController.statistics.numUsedMeasurements(timestep);
-            numDiscardedMeas = ncsController.statistics.numDiscardedMeasurements(timestep);
-            actualControllerState = ncsController.statistics.controllerStates(:, timestep + 1);
-            
-            
+            [numUsedMeas, numDiscardedMeas, actualControllerState] = ncsController.getStatisticsForTimestep(timestep);
+                        
             this.verifyNotEmpty(dataPacket);
             this.verifyClass(dataPacket, ?DataPacket);
             
@@ -312,8 +311,13 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             this.verifyTrue(ncsController.changeCaDelayProbs(newDelayProbs));
             
             % now use a controller that does not support this
+            % initially, provide the controller with a mode transition
+            % matrix
+            modeTransitionMatrix = Utility.calculateDelayTransitionMatrix(...
+                Utility.truncateDiscreteProbabilityDistribution(this.initialCaDelayDistribution, this.controlSeqLength + 1));
+            
             newController = FiniteHorizonController(this.A, this.B, this.Q, this.R, ...
-                this.delayWeights, this.controlSeqLength, 1);
+                modeTransitionMatrix, this.controlSeqLength, 1);
             ncsController = NcsControllerWithFilter(newController, this.filter, ...
                 this.filterPlantModel, this.filterSensorModel, this.defaultInput, this.initialCaDelayDistribution);
             

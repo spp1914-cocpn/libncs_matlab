@@ -7,7 +7,7 @@ classdef NcsController < handle
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2017-2019  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2017-2020  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -28,19 +28,19 @@ classdef NcsController < handle
     %    You should have received a copy of the GNU General Public License
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
     
-    properties (Constant, Access = private)
+    properties (Constant, Access = public)
         defaultControlErrorWindowSize = 10; % in time steps
     end
     
     properties (Access = public)
-        controlErrorWindowSize = NcsController.defaultControlErrorWindowSize; % in time steps
+        controlErrorWindowSize(1,1) double {mustBePositive, mustBeInteger} = NcsController.defaultControlErrorWindowSize; % in time steps
     end
     
     properties (SetAccess=immutable, GetAccess = public)
-        controller@SequenceBasedController;
+        controller;
         % origin shift: useful, in case controller uses a linearized model
         % of the plant dynamics
-        plantStateOrigin; % the origin of the plant coordinate system in controller coordinates        
+        plantStateOrigin; % column vector, the origin of the plant coordinate system in controller coordinates
     end
     
     properties (SetAccess = immutable, GetAccess=private)
@@ -53,13 +53,13 @@ classdef NcsController < handle
         defaultInput; % the default input, stored as column vector
     end    
     
-    properties (SetAccess = protected, GetAccess = public)
+    properties (SetAccess = protected, GetAccess = public)       
         % indicate whether controller works event-based
-        isEventBased@logical = false;      
+        isEventBased(1,1) logical = false;  
     end
     
-    properties (SetAccess = private, GetAccess=public)
-         statistics;
+    properties (Access = private)
+        statistics;
     end
     
     properties (Dependent, GetAccess = public)
@@ -69,14 +69,7 @@ classdef NcsController < handle
     methods
         function sequenceLength = get.controlSequenceLength(this)
             sequenceLength = this.controller.sequenceLength;
-        end
-        
-        function set.controlErrorWindowSize(this, windowSize)
-            assert(Checks.isPosScalar(windowSize) && mod(windowSize, 1) == 0, ...
-                'NcsController:SetControlErrorWindowSize:InvalidWindowSize', ...
-                '** <windowSize> must be a positive integer **');
-            this.controlErrorWindowSize = windowSize;
-        end
+        end        
     end
    
     methods (Access = public)
@@ -106,15 +99,21 @@ classdef NcsController < handle
             % Returns:
             %   << this (NcsController)
             %      A new NcsController instance.
+            
+            arguments
+                controller(1,1) SequenceBasedController
+                defaultInput(:, 1) double {mustBeFinite}
+                plantStateOrigin(:, 1) double {mustBeFinite} = zeros(0,1)
+            end
+
             this.controller = controller;
+            this.defaultInput = defaultInput(:);
+            this.plantStateOrigin = plantStateOrigin(:);
             
             if Checks.isClass(this.controller, 'EventTriggeredInfiniteHorizonController')
                 this.isEventBased = true;
             end
-            if nargin == 3 && Checks.isVec(plantStateOrigin)
-                this.plantStateOrigin = plantStateOrigin(:);
-            end
-            this.defaultInput = defaultInput(:);
+            
             this.doStepFun = this.constructDoStepFun();
             this.doComputeControlErrorFun = this.constructComputeControlErrorFun();
             this.canChangeCaProbsFun = this.constructCanChangeCaDelayProbsFun();
@@ -150,8 +149,7 @@ classdef NcsController < handle
         
         %% getCurrentStageCosts
         function stageCosts = getCurrentStageCosts(this, plantState, appliedInput, timestep)
-            % Get the current stage costs for the given plant
-            % true state.
+            % Get the current stage costs for the given plant true state.
             %
             % Parameters:
             %   >> plantState (Vector)
@@ -268,7 +266,6 @@ classdef NcsController < handle
             %      by the controller, with the individual inputs column-wise arranged,
             %      to be transmitted to the actuator.
             %      Empty matrix is returned in case none is to be transmitted (e.g., when the controller is event-based).
-
             
             this.preDoStep(timestep);
             [controllerState, inputSequence, numUsedMeas, numDiscardedMeas] ...
@@ -281,11 +278,50 @@ classdef NcsController < handle
         
         %% initStatisticsRecording
         function initStatisticsRecording(this, maxLoopSteps, dimState)
-        
+            % maxLoopSteps is an educated guess: actual number of steps can
+            % be different if controller adapts sampling rate an runtime
             this.statistics.numUsedMeasurements = nan(1, maxLoopSteps);
             this.statistics.numDiscardedMeasurements = nan(1, maxLoopSteps);            
             %
             this.statistics.controllerStates = zeros(dimState, maxLoopSteps + 1);
+        end
+        
+        %% getStatistics
+        function controllerStats = getStatistics(this, numControllerSteps)
+            % Get the statistical data that has been recorded during a
+            % simulation run of a given number of time steps.
+            %
+            % Parameters:
+            %   >> numControllerSteps (Positive integer)
+            %      The number of invocations of the controller during the
+            %      simulation of the NCS.
+            %
+            % Returns:
+            %   << statistics (Struct)
+            %      The statistical data collected during the simulation.
+            %
+            
+            if numControllerSteps < numel(this.statistics.numUsedMeasurements)
+                controllerStats.numUsedMeasurements = this.statistics.numUsedMeasurements(1:numControllerSteps);
+                controllerStats.numDiscardedMeasurements = this.statistics.numDiscardedMeasurements(1:numControllerSteps);
+                controllerStats.controllerStates = this.statistics.controllerStates(:, 1:numControllerSteps + 1);
+            elseif numControllerSteps == size(this.statistics.controllerStates, 2)
+                controllerStats.numUsedMeasurements = this.statistics.numUsedMeasurements(1:numControllerSteps);
+                controllerStats.numDiscardedMeasurements = this.statistics.numDiscardedMeasurements(1:numControllerSteps);
+                controllerStats.controllerStates = this.statistics.controllerStates;    
+            else
+                controllerStats.numUsedMeasurements = this.statistics.numUsedMeasurements;
+                controllerStats.numDiscardedMeasurements = this.statistics.numDiscardedMeasurements;
+                controllerStats.controllerStates = this.statistics.controllerStates;               
+            end
+        end
+        
+        %% getStatisticsForTimestep
+        function [numUsedMeasurements, numDiscardedMeasurements, controllerState] = getStatisticsForTimestep(this, timestep)
+            % get the data receorded at the specified time step
+            numUsedMeasurements = this.statistics.numUsedMeasurements(timestep);
+            numDiscardedMeasurements = this.statistics.numDiscardedMeasurements(timestep);
+            controllerState = this.statistics.controllerStates(:, timestep + 1);
         end
         
         %% changeSequenceLength
@@ -333,6 +369,15 @@ classdef NcsController < handle
                 Validator.validateDiscreteProbabilityDistribution(newCaDelayProbs);
                 % do the change
                 this.doChangeCaDelayProbs(newCaDelayProbs);
+                ret = true;
+            end
+        end
+        
+        %% changeModelParameters
+        function ret = changeModelParameters(this, newA, newB, newW, newC)            
+            ret = false;
+            if this.canChangeModelParameters()
+                this.doChangeModelParameters(newA, newB, newW, newC);
                 ret = true;
             end
         end
@@ -465,7 +510,7 @@ classdef NcsController < handle
             this.statistics.numUsedMeasurements(timestep) = numUsedMeas;
             this.statistics.numDiscardedMeasurements(timestep) = numDiscardedMeas;
             this.statistics.controllerStates(:, timestep + 1) = controllerState;
-        end
+        end       
         
         %% computeControlError
         function errorMeasure = computeControlError(this, states, timestep)
@@ -503,11 +548,22 @@ classdef NcsController < handle
             ret = this.canChangeCaProbsFun();
         end
         
+        %% canChangeModelParameters
+        function ret = canChangeModelParameters(this)            
+            ret = Checks.isClass(this.controller, 'IMMBasedRecedingHorizonController');
+        end
+        
         %% doChangeCaDelayProbs
         function doChangeCaDelayProbs(this, caDelayProbs)
             %error('NcsController:DoChangeCaDelayProbs:UnsupportedOperation', ...
             %    '** This should not happen, intended to be overriden by subclasses. **');
             this.controller.changeCaDelayProbs(caDelayProbs);
+        end
+        
+        %% doChangeSamplingInterval
+        function doChangeModelParameters(this, newA, newB, newW, ~)
+            % so far only for the IMMBasedRecedingHorizonController
+            this.controller.changeModelParameters(newA, newB, newW);
         end
         
         %% reshapeInputSequence
@@ -582,17 +638,14 @@ classdef NcsController < handle
             modeObservations = [];
             modeDelays = [];
             if numel(acPackets) ~= 0
-                ackPayloads = cell(1, numel(acPackets));
-                ackDelays = cell(1, numel(acPackets));
-                [ackPayloads{:}] = acPackets(:).payload;
-                [ackDelays{:}] = acPackets(:).packetDelay;
                 % get the observed modes from the ACK packets
-                ackedPacketTimes = cell2mat(ackPayloads);
-                modeDelays = cell2mat(ackDelays);
-                % get the time stamps of the ACK packets
-                ackTimeStamps = timestep - modeDelays;
-                
-                modeObservations = ackTimeStamps - ackedPacketTimes + 1;
+                modeObservations = zeros(1, numel(acPackets));
+                modeDelays = zeros(1, numel(acPackets));
+                for i=1:numel(acPackets)
+                    modeTime = acPackets(i).payload{2}.timeStep; % the time step of the mode piggy-backed by the ack
+                    modeObservations(i) = acPackets(i).payload{2}.theta; % the value of the mode, given as integer in [1, controlSeqLength + 1]
+                    modeDelays(i) = timestep - modeTime;
+                end
             end
         end
          
@@ -645,31 +698,42 @@ classdef NcsController < handle
             % use an integral measure, i.e., a trailing sum with a fixed
             % horizon (number of columns of states) that is considered
             if Checks.isClass(this.controller, 'SequenceBasedTrackingController')
-                % we track a reference
-                fun = @(states, timestep) ...
-                    sum(sqrt(sum(bsxfun(@(s, t) this.controller.getDeviationFromRefForState(s, t) .^ 2, states, timestep - [size(states, 2)-1:-1:0]))));
+                % we track a reference of arbitrary dimension
+                fun=@computeTrackingError;
             else
                 % we drive the plant to the origin
-                fun = @(states, timestep) sum(sqrt(sum(states .^ 2)));
-            end       
+                %fun = @(states, timestep) sum(sqrt(sum(states .^ 2)));
+                fun = @(states, timestep) sum(vecnorm(states));
+            end
+            
+            %% computeTrackingError
+            function trackingError = computeTrackingError(states, timestep)
+                trackingError = 0;
+                timesteps = timestep - [size(states, 2)-1:-1:0];
+                for i=1:numel(timesteps)
+                    trackingError = trackingError + norm(this.controller.getDeviationFromRefForState(states(:, i), timesteps(i)));
+                end
+            end
             
         end
         
         %% constructDoStepFun
         function fun = constructDoStepFun(this)
-            if Checks.isClass(this.controller, 'IMMBasedRecedingHorizonController')
-                fun =@fun2;
-            else
-                fun=@fun1;
+            switch metaclass(this.controller)
+                case {?IMMBasedRecedingHorizonController}
+                    disp('hit');
+                    fun = @computeGetState;
+                otherwise
+                    fun = @getStateCompute;
             end
             
-            function [state, input, numUsedMeas, numDiscardedMeas] = fun1(measurements, measDelays, modeObservations, modeDelays)
+            function [state, input, numUsedMeas, numDiscardedMeas] = getStateCompute(measurements, measDelays, modeObservations, modeDelays)
                 % retrieve state before sequence is computed
                 state = this.controller.getControllerPlantState();
                 input = this.reshapeInputSequence(this.controller.computeControlSequence(measurements, measDelays, modeObservations, modeDelays));
                 [numUsedMeas, numDiscardedMeas] = this.controller.getLastComputationMeasurementData();
             end
-            function [state, input, numUsedMeas, numDiscardedMeas] = fun2(measurements, measDelays, modeObservations, modeDelays)
+            function [state, input, numUsedMeas, numDiscardedMeas] = computeGetState(measurements, measDelays, modeObservations, modeDelays)
                 input = this.reshapeInputSequence(this.controller.computeControlSequence(measurements, measDelays, modeObservations, modeDelays));
                 % retrieve state after sequence is computed
                 state = this.controller.getControllerPlantState();

@@ -7,7 +7,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2017-2019  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2017-2020  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -29,15 +29,18 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
     
     properties (Access = private)
-        ncsDefaultName = 'NCS';
         ncsDefaultSamplingInterval = 0.1;
+        ncsDefaultPlantSamplingInterval = 0.001;
         ncsDefaultNetworkType = NetworkType.UdpLikeWithAcks;
         
         ncsName;
         ncsSamplingInterval;
+        plantSamplingInterval;
         ncsNetworkType;
         
-        maxLoopSteps;
+        maxPlantSteps;
+        maxControllerSteps;
+        maxSimTime;
         maxMeasDelay;
         controlSeqLength;
         
@@ -74,9 +77,12 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
         function init(this)
             this.ncsName = 'TestNcs';
             this.ncsSamplingInterval = 0.2;
+            this.plantSamplingInterval = this.ncsSamplingInterval; % assume same sampling rate for testing
             this.ncsNetworkType = NetworkType.TcpLike;
             
-            this.maxLoopSteps = 100;
+            this.maxPlantSteps = 100;
+            this.maxControllerSteps = this.maxPlantSteps;
+            this.maxSimTime = ConvertToPicoseconds(this.maxPlantSteps * this.plantSamplingInterval);
             this.maxMeasDelay = 2;
             this.controlSeqLength = 2;
             
@@ -101,12 +107,12 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             this.plantStateDistribution = Gaussian(this.plantState, 0.5 * eye(this.dimX));
             this.zeroPlantStateDistribution = Gaussian(this.zeroPlantState, 0.5 * eye(this.dimX));
             
-            this.filter = DelayedKF(this.maxMeasDelay);
+            this.filter = DelayedKF(this.maxMeasDelay, eye(3));
             %this.filter.setState(this.plantStateDistribution);
             this.filterPlantModel = DelayedKFSystemModel(this.A, this.B, Gaussian(zeros(this.dimX, 1), this.W), ...
                 this.controlSeqLength + 1, this.maxMeasDelay, [1/3 1/3 1/3]);
             
-            this.actuator = BufferingActuator(this.controlSeqLength, this.maxMeasDelay, zeros(this.dimU, 1));
+            this.actuator = BufferingActuator(this.controlSeqLength, zeros(this.dimU, 1));
             this.plantSubsystem = NcsPlant(this.plant, this.actuator);
             
             this.controller = NominalPredictiveController(this.A, this.B, this.Q, this.R, this.controlSeqLength);
@@ -114,14 +120,19 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
                 this.filterPlantModel, this.sensor, zeros(this.dimU, 1), [1/4 1/4 1/4 1/4]');
             
             this.ncsUnderTest = NetworkedControlSystem(this.controllerSubsystem, this.plantSubsystem, this.sensorSubsystem, ...
-                this.ncsName, this.ncsSamplingInterval, this.ncsNetworkType);
+                this.ncsName, this.ncsSamplingInterval, this.plantSamplingInterval, this.ncsNetworkType);
         end
     end
     
     methods (Test)
         %% testNetworkedControlSystemInvalidSamplingInterval
         function testNetworkedControlSystemInvalidSamplingInterval(this)
-            expectedErrId = 'NetworkedControlSystem:InvalidSamplingInterval';
+            if verLessThan('matlab', '9.8')
+                % Matlab R2018 or R2019
+                expectedErrId = 'MATLAB:UnableToConvert';
+            else
+                expectedErrId = 'MATLAB:validation:UnableToConvert';
+            end
             
             invalidSamplingInterval = this; % not a scalar
             this.verifyError(@() NetworkedControlSystem(this.controllerSubsystem, this.plantSubsystem, this.sensorSubsystem, ...
@@ -129,42 +140,70 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             
             invalidSamplingInterval = 0; % scalar value, but not positive
             this.verifyError(@() NetworkedControlSystem(this.controllerSubsystem, this.plantSubsystem, this.sensorSubsystem, ...
-                this.ncsName, invalidSamplingInterval), expectedErrId);
+                this.ncsName, invalidSamplingInterval), 'MATLAB:validators:mustBePositive');
             
             invalidSamplingInterval = 1i; % scalar value, but not a real value
             this.verifyError(@() NetworkedControlSystem(this.controllerSubsystem, this.plantSubsystem, this.sensorSubsystem, ...
-                this.ncsName, invalidSamplingInterval), expectedErrId);
+                this.ncsName, invalidSamplingInterval), 'MATLAB:validators:mustBeReal');
+        end
+        
+        %% testNetworkedControlSystemInvalidPlantSamplingInterval
+        function testNetworkedControlSystemInvalidPlantSamplingInterval(this)
+            if verLessThan('matlab', '9.8')
+                % Matlab R2018 or R2019
+                expectedErrId = 'MATLAB:UnableToConvert';
+            else
+                expectedErrId = 'MATLAB:validation:UnableToConvert';
+            end
+            
+            invalidPlantSamplingInterval = this; % not a scalar
+            this.verifyError(@() NetworkedControlSystem(this.controllerSubsystem, this.plantSubsystem, this.sensorSubsystem, ...
+                this.ncsName, this.plantSamplingInterval, invalidPlantSamplingInterval), expectedErrId);
+            
+            invalidPlantSamplingInterval = 0; % scalar value, but not positive
+            this.verifyError(@() NetworkedControlSystem(this.controllerSubsystem, this.plantSubsystem, this.sensorSubsystem, ...
+                this.ncsName, this.plantSamplingInterval, invalidPlantSamplingInterval), 'MATLAB:validators:mustBePositive');
+            
+            invalidPlantSamplingInterval = 1i; % scalar value, but not a real value
+            this.verifyError(@() NetworkedControlSystem(this.controllerSubsystem, this.plantSubsystem, this.sensorSubsystem, ...
+                this.ncsName, this.plantSamplingInterval, invalidPlantSamplingInterval), 'MATLAB:validators:mustBeReal');
         end
         
         %% testNetworkedControlSystemInvalidNetworkType
         function testNetworkedControlSystemInvalidNetworkType(this)
-            expectedErrId = 'NetworkedControlSystem:InvalidNetworkType';
+            if verLessThan('matlab', '9.8')
+                % Matlab R2018 or R2019
+                expectedErrId = 'MATLAB:UnableToConvert';
+            else
+                expectedErrId = 'MATLAB:validation:UnableToConvert';
+            end
             
             invalidNetworkType = this; % not a scalar
             this.verifyError(@() NetworkedControlSystem(this.controllerSubsystem, this.plantSubsystem, this.sensorSubsystem, ...
-                this.ncsName, this.ncsSamplingInterval, invalidNetworkType), expectedErrId);
+                this.ncsName, this.ncsSamplingInterval, this.plantSamplingInterval, invalidNetworkType), expectedErrId);
             
             invalidNetworkType = 0; % integer, but not positive
             this.verifyError(@() NetworkedControlSystem(this.controllerSubsystem, this.plantSubsystem, this.sensorSubsystem, ...
-                this.ncsName, this.ncsSamplingInterval, invalidNetworkType), expectedErrId);
+                this.ncsName, this.ncsSamplingInterval, this.plantSamplingInterval, invalidNetworkType), expectedErrId);
             
             invalidNetworkType = 1i; % scalar value, but not an integer
             this.verifyError(@() NetworkedControlSystem(this.controllerSubsystem, this.plantSubsystem, this.sensorSubsystem, ...
-                this.ncsName, this.ncsSamplingInterval, invalidNetworkType), expectedErrId);
+                this.ncsName, this.ncsSamplingInterval, this.plantSamplingInterval, invalidNetworkType), expectedErrId);
             
             invalidNetworkType = NetworkType.getMaxId + 1; % integer, but out of bounds
             this.verifyError(@() NetworkedControlSystem(this.controllerSubsystem, this.plantSubsystem, this.sensorSubsystem, ...
-                this.ncsName, this.ncsSamplingInterval, invalidNetworkType), expectedErrId);
+                this.ncsName, this.ncsSamplingInterval, this.plantSamplingInterval, invalidNetworkType), expectedErrId);
         end
         
         %% testNetworkedControlSystemNoOptionalArguments
         function testNetworkedControlSystemNoOptionalArguments(this)
-            ncs = NetworkedControlSystem(this.controllerSubsystem, this.plantSubsystem, this.sensorSubsystem);
+            ncs = NetworkedControlSystem(this.controllerSubsystem, this.plantSubsystem, this.sensorSubsystem, this.ncsName);
             
-            this.verifyEqual(ncs.name, this.ncsDefaultName);
             this.verifyEqual(ncs.samplingInterval, this.ncsDefaultSamplingInterval);
+            this.verifyEqual(ncs.plantSamplingInterval, this.ncsDefaultPlantSamplingInterval);
             this.verifyEqual(ncs.networkType, this.ncsDefaultNetworkType);
             
+            this.verifyEqual(ncs.name, this.ncsName);
             this.verifyEqual(ncs.sensor, this.sensorSubsystem);
             this.verifyEqual(ncs.controller, this.controllerSubsystem);
             this.verifyEqual(ncs.plant, this.plantSubsystem);
@@ -172,12 +211,13 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
         
         %% testNetworkedControlSystemOneOptionalArgument
         function testNetworkedControlSystemOneOptionalArgument(this)
-            ncs = NetworkedControlSystem(this.controllerSubsystem, this.plantSubsystem, this.sensorSubsystem, this.ncsName);
-            
-            this.verifyEqual(ncs.name, this.ncsName);
-            this.verifyEqual(ncs.samplingInterval, this.ncsDefaultSamplingInterval);
+            ncs = NetworkedControlSystem(this.controllerSubsystem, this.plantSubsystem, this.sensorSubsystem, this.ncsName, this.ncsSamplingInterval);
+                        
+            this.verifyEqual(ncs.samplingInterval, this.ncsSamplingInterval);
+            this.verifyEqual(ncs.plantSamplingInterval, this.ncsDefaultPlantSamplingInterval);
             this.verifyEqual(ncs.networkType, this.ncsDefaultNetworkType);
             
+            this.verifyEqual(ncs.name, this.ncsName);
             this.verifyEqual(ncs.sensor, this.sensorSubsystem);
             this.verifyEqual(ncs.controller, this.controllerSubsystem);
             this.verifyEqual(ncs.plant, this.plantSubsystem);
@@ -186,12 +226,13 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
         %% testNetworkedControlSystemTwoOptionalArguments
         function testNetworkedControlSystemTwoOptionalArguments(this)
             ncs = NetworkedControlSystem(this.controllerSubsystem, this.plantSubsystem, this.sensorSubsystem, ...
-                this.ncsName, this.ncsSamplingInterval);
+                this.ncsName, this.ncsSamplingInterval, this.plantSamplingInterval);
             
-            this.verifyEqual(ncs.name, this.ncsName);
             this.verifyEqual(ncs.samplingInterval, this.ncsSamplingInterval);
+            this.verifyEqual(ncs.plantSamplingInterval, this.plantSamplingInterval);
             this.verifyEqual(ncs.networkType, this.ncsDefaultNetworkType);
             
+            this.verifyEqual(ncs.name, this.ncsName);
             this.verifyEqual(ncs.sensor, this.sensorSubsystem);
             this.verifyEqual(ncs.controller, this.controllerSubsystem);
             this.verifyEqual(ncs.plant, this.plantSubsystem);
@@ -200,12 +241,13 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
         %% testNetworkedControlSystemThreeOptionalArguments
         function testNetworkedControlSystemThreeOptionalArguments(this)
             ncs = NetworkedControlSystem(this.controllerSubsystem, this.plantSubsystem, this.sensorSubsystem, ...
-                this.ncsName, this.ncsSamplingInterval, this.ncsNetworkType);
+                this.ncsName, this.ncsSamplingInterval, this.plantSamplingInterval, this.ncsNetworkType);
             
-            this.verifyEqual(ncs.name, this.ncsName);
             this.verifyEqual(ncs.samplingInterval, this.ncsSamplingInterval);
+            this.verifyEqual(ncs.plantSamplingInterval, this.plantSamplingInterval);
             this.verifyEqual(ncs.networkType, this.ncsNetworkType);
             
+            this.verifyEqual(ncs.name, this.ncsName);
             this.verifyEqual(ncs.sensor, this.sensorSubsystem);
             this.verifyEqual(ncs.controller, this.controllerSubsystem);
             this.verifyEqual(ncs.plant, this.plantSubsystem);
@@ -213,12 +255,13 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             % pass network type as integer
             type = NetworkType.TcpLike;
             ncs = NetworkedControlSystem(this.controllerSubsystem, this.plantSubsystem, this.sensorSubsystem, ...
-                this.ncsName, this.ncsSamplingInterval, int64(type));
+                this.ncsName, this.ncsSamplingInterval, this.plantSamplingInterval, int64(type));
             
-            this.verifyEqual(ncs.name, this.ncsName);
             this.verifyEqual(ncs.samplingInterval, this.ncsSamplingInterval);
+            this.verifyEqual(ncs.plantSamplingInterval, this.plantSamplingInterval);
             this.verifyEqual(ncs.networkType, type);     
 
+            this.verifyEqual(ncs.name, this.ncsName);
             this.verifyEqual(ncs.sensor, this.sensorSubsystem);
             this.verifyEqual(ncs.controller, this.controllerSubsystem);
             this.verifyEqual(ncs.plant, this.plantSubsystem);
@@ -311,47 +354,37 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             this.verifyError(@() this.ncsUnderTest.initPlant(invalidState), expectedErrId);
         end
 %%
-%%
-        %% testInitStatisticsRecordingInvalidMaxLoopSteps
-        function testInitStatisticsRecordingInvalidMaxLoopSteps(this)            
-            this.assertNotEmpty(this.ncsUnderTest.plant);
-            this.assertNotEmpty(this.ncsUnderTest.controller);
-             
-            expectedErrId = 'NetworkedControlSystem:InitStatisticsRecording';
-            
-            invalidMaxLoopSteps = this; % not a scalar
-            this.verifyError(@() this.ncsUnderTest.initStatisticsRecording(invalidMaxLoopSteps), expectedErrId);
-            
-            invalidMaxLoopSteps = 0; % scalar value, but not positive
-            this.verifyError(@() this.ncsUnderTest.initStatisticsRecording(invalidMaxLoopSteps), expectedErrId);
-            
-            invalidMaxLoopSteps = 1i; % scalar value, but not a real value
-            this.verifyError(@() this.ncsUnderTest.initStatisticsRecording(invalidMaxLoopSteps), expectedErrId);
-            
-            invalidMaxLoopSteps = 42.5; % scalar value, but not an integer
-            this.verifyError(@() this.ncsUnderTest.initStatisticsRecording(invalidMaxLoopSteps), expectedErrId);
-            
-            invalidMaxLoopSteps = nan; % scalar value, but not finite
-            this.verifyError(@() this.ncsUnderTest.initStatisticsRecording(invalidMaxLoopSteps), expectedErrId);
-        end
-        
+%%        
         %% testInitStatisticsRecording
         function testInitStatisticsRecording(this)            
             this.assertNotEmpty(this.ncsUnderTest.plant);
             this.assertNotEmpty(this.ncsUnderTest.controller);
-                 
+            
+            this.filter.setState(this.zeroPlantStateDistribution);
             this.ncsUnderTest.initPlant(this.plantState);
-                        
+           
             % should be a successful call
-            this.ncsUnderTest.initStatisticsRecording(this.maxLoopSteps);
-            stats = this.ncsUnderTest.getStatistics();
+            this.ncsUnderTest.initStatisticsRecording(this.maxSimTime);
+            
+            % now perform all the steps
+            for i=1:this.maxPlantSteps % equals max controller steps
+                timestamp = ConvertToPicoseconds(i * this.plantSamplingInterval);
+                this.ncsUnderTest.plantStep(timestamp);
+                this.ncsUnderTest.step(timestamp, [], [], []);
+            end
+            
+            % and obtain the data gathered during "simulation"
+            % check if initial conditions were set correctly
+            stats = this.ncsUnderTest.getStatistics();            
+            
             this.verifyNotEmpty(stats);
             recordedIntialState = stats.trueStates(:, 1);
             recordedInitialMode = stats.trueModes(1);
+            recordedInitialInput = stats.appliedInputs(:, 1);             
             
             this.verifyEqual(recordedIntialState, this.plantState);
-            this.verifyEqual(recordedInitialMode, this.controlSeqLength + 1);
-         
+            this.verifyFalse(isnan(recordedInitialMode));
+            this.verifyEqual(sum(isnan(recordedInitialInput)), 0);
         end
                 
         %% testGetStatistics
@@ -359,9 +392,18 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             this.assertNotEmpty(this.ncsUnderTest.plant);
             this.assertNotEmpty(this.ncsUnderTest.controller);
             
+            this.filter.setState(this.zeroPlantStateDistribution);
             this.ncsUnderTest.initPlant(this.plantState);
-            this.ncsUnderTest.initStatisticsRecording(this.maxLoopSteps);
+            this.ncsUnderTest.initStatisticsRecording(this.maxSimTime);
             
+            % now perform all the steps
+            for i=1:this.maxPlantSteps % equals max controller steps
+                timestamp = ConvertToPicoseconds(i * this.plantSamplingInterval);
+                this.ncsUnderTest.plantStep(timestamp);
+                this.ncsUnderTest.step(timestamp, [], [], []);
+            end
+            
+            % and obtain the data gathered during "simulation"
             actualStatistics = this.ncsUnderTest.getStatistics();
             
             this.verifyTrue(isstruct(actualStatistics));
@@ -373,99 +415,79 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             this.verifyTrue(isfield(actualStatistics, 'numDiscardedMeasurements'));
             this.verifyTrue(isfield(actualStatistics, 'numDiscardedControlSequences'));
             this.verifyTrue(isfield(actualStatistics, 'controllerStates'));
+%                              
+            this.verifySize(actualStatistics.trueStates, [this.dimX this.maxPlantSteps+1]);
+            this.verifySize(actualStatistics.trueModes, [1 this.maxControllerSteps]);
+            this.verifySize(actualStatistics.appliedInputs, [this.dimU this.maxPlantSteps]);
+            this.verifySize(actualStatistics.numUsedMeasurements, [1 this.maxControllerSteps]);
+            this.verifySize(actualStatistics.numDiscardedMeasurements, [1 this.maxControllerSteps]);
+            this.verifySize(actualStatistics.numDiscardedControlSequences, [1 this.maxControllerSteps]);
+            this.verifySize(actualStatistics.controllerStates, [this.dimX this.maxControllerSteps+1]);
         end
                 
-         %% testGetStageCostsNotInitialized
-        function testGetStageCostsNotInitialized(this)            
+         %% testGetCurrentStageCostsNotInitialized
+        function testGetCurrentStageCostsNotInitialized(this)            
             this.assertNotEmpty(this.ncsUnderTest.plant);
-            % plant was set, but not initialized
+            this.assertNotEmpty(this.ncsUnderTest.controller);
+            % plant and controller were set, but not initialized or used
             % we expect zero to be returned independent of timestep
             
-            this.verifyEqual(this.ncsUnderTest.getStageCosts(1), 0);
-            this.verifyEqual(this.ncsUnderTest.getStageCosts(10), 0);
+            this.verifyEqual(this.ncsUnderTest.getCurrentStageCosts(), 0);
+            
+            % now perform a plant step
+            this.ncsUnderTest.initPlant(this.plantState);
+            timestamp = ConvertToPicoseconds(this.plantSamplingInterval); % in pico seconds
+            this.ncsUnderTest.plantStep(timestamp);
+            
+            % controller was not invoked
+            this.verifyEqual(this.ncsUnderTest.getCurrentStageCosts(), 0);
         end
         
-        %% testGetStageCosts
-        function testGetStageCosts(this)           
+        %% testGetCurrentStageCosts
+        function testGetCurrentStageCosts(this)           
             this.assertNotEmpty(this.ncsUnderTest.plant);            
+            this.assertNotEmpty(this.ncsUnderTest.controller);
             this.filter.setState(this.plantStateDistribution);            
             
             % initialize plant with deterministic state
             this.ncsUnderTest.initPlant(this.plantState);
-            this.ncsUnderTest.initStatisticsRecording(this.maxLoopSteps);
+            this.ncsUnderTest.initStatisticsRecording(this.maxSimTime);
             
             % perform a control cycle without any data packets
             % so there is no input
-            timestep = 1;
-            this.ncsUnderTest.step(timestep, [], [], []);
-            stats = this.ncsUnderTest.getStatistics().trueStates;
-            trueState = stats(:, timestep + 1);
+            plantTimestamp = ConvertToPicoseconds(this.plantSamplingInterval); % in pico seconds
+            controllerTimestamp = ConvertToPicoseconds(this.ncsSamplingInterval); % in pico seconds
+            
+            rng(42); % for reproducability
+            this.ncsUnderTest.plantStep(plantTimestamp);            
+            this.ncsUnderTest.step(controllerTimestamp, [], [], []);
+
+            rng(42);
+            trueState = this.A * this.plantState + mvnrnd(zeros(this.dimX, 1), this.W)';
             
             expectedStageCosts = trueState' * this.Q * trueState;
-            actualStageCosts = this.ncsUnderTest.getStageCosts(timestep);
+            actualStageCosts = this.ncsUnderTest.getCurrentStageCosts();
             this.verifyEqual(actualStageCosts, expectedStageCosts);
          end
                 
         
-        %% testGetControlErrorNotInitialized
-        function testGetControlErrorNotInitialized(this)            
+        %% testGetCurrentControlErrorNotInitialized
+        function testGetCurrentControlErrorNotInitialized(this)            
             this.assertNotEmpty(this.ncsUnderTest.plant);
-            % plant was set, but not initialized
+            this.assertNotEmpty(this.ncsUnderTest.controller);
+            % plant and controller were set, but not initialized or used
             % we expect zero to be returned independent of timestep
             
-            this.verifyEqual(this.ncsUnderTest.getControlError(1), 0);
-            this.verifyEqual(this.ncsUnderTest.getControlError(10), 0);
-        end
-        
-        %% testGetControlError
-        function testGetControlError(this)
-            this.assertNotEmpty(this.ncsUnderTest.plant);            
-            this.filter.setState(this.plantStateDistribution);
-            % initialize plant with deterministic state
+            this.verifyEqual(this.ncsUnderTest.getCurrentControlError(), 0);
+            
+            % now perform a plant step
             this.ncsUnderTest.initPlant(this.plantState);
+            timestamp = ConvertToPicoseconds(this.plantSamplingInterval); % in pico seconds
+            this.ncsUnderTest.plantStep(timestamp);
             
-            % and ensure that statistics is recorded
-            this.ncsUnderTest.initStatisticsRecording(this.maxLoopSteps);
-            this.assertNotEmpty(this.ncsUnderTest.getStatistics());
-            this.assertNotEmpty(this.ncsUnderTest.getStatistics().trueStates);
-            this.assertNotEmpty(this.ncsUnderTest.getStatistics().controllerStates);
-            
-            % perform three control cycles without any data packets
-            % so there is no input
-            timestep = 1;
-            for k=0:10
-                this.ncsUnderTest.step(timestep+k, [], [], []);
-            end            
-            trueStates = this.ncsUnderTest.getStatistics().trueStates;
-            controllerStates = this.ncsUnderTest.getStatistics().controllerStates;
-            
-            % compute "instantaneous error" at times 1, 2, 3
-            %k=1
-            expectedError = norm(trueStates(:, 2));
-            expectedEstimatedError = norm(controllerStates(:, 2));
-            [actualError, estimatedError] = this.ncsUnderTest.getControlError(1);
-            this.verifyEqual(actualError, expectedError, 'AbsTol', 1e-8);
-            this.verifyEqual(estimatedError, expectedEstimatedError, 'AbsTol', 1e-8);
-            %k=2
-            expectedError = norm(trueStates(:, 2)) + norm(trueStates(:, 3));
-            expectedEstimatedError = norm(controllerStates(:, 2)) + norm(controllerStates(:, 3));
-            [actualError, estimatedError] = this.ncsUnderTest.getControlError(2);
-            this.verifyEqual(actualError, expectedError, 'AbsTol', 1e-8);
-            this.verifyEqual(estimatedError, expectedEstimatedError, 'AbsTol', 1e-8);
-            %k=3
-            expectedError = norm(trueStates(:, 2)) + norm(trueStates(:, 3)) + norm(trueStates(:, 4));
-            expectedEstimatedError = norm(controllerStates(:, 2)) + norm(controllerStates(:, 3)) + norm(controllerStates(:, 4));
-            [actualError, estimatedError] = this.ncsUnderTest.getControlError(3);
-            this.verifyEqual(actualError, expectedError, 'AbsTol', 1e-8);
-            this.verifyEqual(estimatedError, expectedEstimatedError, 'AbsTol', 1e-8);
-            
-            %k=11
-            expectedError = sum(sqrt(sum((trueStates(:, 3:12) .^ 2))));
-            expectedEstimatedError = sum(sqrt(sum((controllerStates(:, 3:12) .^ 2))));
-            [actualError, estimatedError] = this.ncsUnderTest.getControlError(11);
-            this.verifyEqual(actualError, expectedError, 'AbsTol', 1e-8);
-            this.verifyEqual(estimatedError, expectedEstimatedError, 'AbsTol', 1e-8);
-        end
+            % controller was not invoked
+            this.verifyEqual(this.ncsUnderTest.getCurrentControlError(), 0);
+        end        
         
         %% testStepNoPackets
         function testStepNoPackets(this)
@@ -475,11 +497,15 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             this.assertNotEmpty(this.ncsUnderTest.controller);
             
             this.ncsUnderTest.initPlant(this.zeroPlantState);
-            this.ncsUnderTest.initStatisticsRecording(this.maxLoopSteps);
+            this.ncsUnderTest.initStatisticsRecording(this.maxSimTime);
             this.filter.setState(this.zeroPlantStateDistribution);
-                        
+            
             timestep = 1;
-            [caPacket, scPacket, controllerAck] = this.ncsUnderTest.step(timestep, [], [], []);
+            controllerTimestamp = ConvertToPicoseconds(timestep * this.ncsSamplingInterval); % in pico seconds
+            plantTimestamp = ConvertToPicoseconds(timestep * this.plantSamplingInterval); % in pico seconds
+            this.ncsUnderTest.plantStep(plantTimestamp);
+            
+            [caPacket, scPacket, controllerAck] = this.ncsUnderTest.step(controllerTimestamp, [], [], []);
             
             this.verifyClass(caPacket, ?DataPacket);
             this.verifyClass(scPacket, ?DataPacket);
@@ -512,9 +538,9 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             this.verifyEqual(caPacket.destinationAddress, 1)
             
             stats = this.ncsUnderTest.getStatistics();
-            recordedState = stats.trueStates(:, timestep + 1);
+            recordedState = stats.trueStates(:, timestep);
             recordedControllerState = stats.controllerStates(:, timestep + 1);
-            recordedMode = stats.trueModes(timestep + 1);
+            recordedMode = stats.trueModes(timestep);
             recordedInput = stats.appliedInputs(:, timestep);
             recordedNumUsedMeasurements = stats.numUsedMeasurements(timestep);
             recordedNumDiscardedMeasurements = stats.numDiscardedMeasurements(timestep);

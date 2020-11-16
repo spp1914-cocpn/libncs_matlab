@@ -10,7 +10,7 @@ classdef Cache < handle
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2017-2019  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2017-2020  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -46,7 +46,7 @@ classdef Cache < handle
         end
         
         function ensureExistsInternal(this)
-           if ~isdir(this.cacheFolder)
+           if ~isfolder(this.cacheFolder)
                 [status, message, ~] = mkdir(this.cacheFolder);
                 if ~status
                     error('Cache:EnsureExists:Mkdir', message);
@@ -55,7 +55,7 @@ classdef Cache < handle
         end
         
         function clearInternal(this)
-            if isdir(this.cacheFolder)
+            if isfolder(this.cacheFolder)
                 [status, message, ~] = rmdir(this.cacheFolder, 's');
                 if ~status
                     error('Cache:Clear:Rmdir', message);

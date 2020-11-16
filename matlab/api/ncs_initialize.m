@@ -36,9 +36,9 @@ function handle = ncs_initialize(maxSimTime, id, configStruct, filename)
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
     
     persistent requiredVariables;
-    requiredVariables = {'controlSequenceLength', 'maxControlSequenceDelay', 'maxMeasDelay', ...
-        'caDelayProbs', 'A', 'B', 'C', 'W', 'V', 'Q', 'R', ...
-        'initialPlantState', 'samplingInterval', 'controllerClassName'};
+    requiredVariables = {'controlSequenceLength', 'maxMeasDelay', ...
+        'caDelayProbs', 'A', 'B', 'C', 'W', 'Q', 'R', 'plant', ...
+        'initialPlantState', 'samplingInterval', 'plantSamplingInterval', 'controllerClassName'};
     % optional variables:
     %   - scDelayProbs: specifies the true or assumed distribution of the delays in the
     %     network between sensor and controller (i.e., for measurements);
@@ -46,11 +46,11 @@ function handle = ncs_initialize(maxSimTime, id, configStruct, filename)
     %   - filterClassName: if a filter is required for state estimation
     %   - initialEstimate: the initial controller state or the initial
     %     estimate of the employed filter (if any)
-    %   - networkType: specifies the network in use (NetworkType)
+    %   - networkType: specifies the network in use (NetworkType) (default UdpLikeWithAcks)
     %   - Z: performance output matrix for the plant output z_k = Z * x_k
     %   - refTrajectory: reference trajectory z_ref to track with the plant output z_k
-    %   - v_mean: mean of the measurement noise (default zero)
-    %   - plant: arbitrary, nonlinear plant dynamics to be used for simulation (NonlinearPlant)
+    %   - V: covariance matrix of the additive, Gaussian measurement noise assumed by the controllers/filters, if present (Positive definite matrix)
+    %   - v_mean: mean of the measurement noise/offset, if present (default zero is assumed otherwise)
     %   - sensor: linear dynamics to be used for simulation of the sensor(LinearMeasurementModel)
     %   - sensorEventBased: flag to indicate whether the sensor shall
     %     transmit measurements in an event-based manner (default false)
@@ -75,7 +75,7 @@ function handle = ncs_initialize(maxSimTime, id, configStruct, filename)
     %   - stateConstraints: linear constraints b_i for MPC, i.e., a_i'*x_k <= b_i
     %   - stateConstraintWeightings: linear constraints weightings a_i for MPC, i.e., a_i'*x_k <= b_i
     %   - inputConstraints: linear constraints d_i for MPC, i.e., c_i'*u_k <= d_i
-    %   - stateConstraintWeightings: linear constraints weightings c_i for MPC, i.e., c_i'*u_k <= d_i
+    %   - inputConstraintWeightings: linear constraints weightings c_i for MPC, i.e., c_i'*u_k <= d_i
     %   - controlErrorWindowSize: the control error is in integral measure,
     %     this parameter specifies the size (in time steps) of the sliding window used to
     %     compute it (positive integer)
@@ -106,23 +106,20 @@ function handle = ncs_initialize(maxSimTime, id, configStruct, filename)
     if isempty(configStruct)
         config = load(filename);
     else
-        % combine data from config file and from struct into a single config
-        % struct
+        % combine data from config file and from struct into a single config struct
         config = configStruct;
         tmp = load(filename);
         fields = fieldnames(tmp);
-        for i=1:length(fields)
+        notFoundIdx = find(~isfield(config, fields))'; % row vector
+        for i=notFoundIdx
             name = fields{i};
-            if ~isfield(config, name)
-                % append config value from the mat file
-                config.(name) = tmp.(name);
-            end
+            % append config value from the mat file
+            config.(name) = tmp.(name);
         end
         clear('tmp');
     end
-    
+
     checkConfig(config, requiredVariables);
-           
     %now ensure that all scalar, integers are internally represented as double
     allFields = fieldnames(config);
     for i=1:length(allFields)
@@ -137,12 +134,12 @@ function handle = ncs_initialize(maxSimTime, id, configStruct, filename)
     % ensure that maxSimTime is always a double, so that ConvertToSeconds
     % can return a fractional value
     loopSteps = floor(ConvertToSeconds(double(maxSimTime)) / config.samplingInterval);
-
-    plant = initPlant(config);
+    
+    [plant, config] = initPlant(config);
     actuator = initActuator(config);
     ncsPlant = NcsPlant(plant, actuator);
-    
-    if isfield(config, 'ignoreControllerCache') && ~config.ignoreControllerCache
+
+    if ~getConfigValueOrDefault(config, 'ignoreControllerCache', true)
         % try to reuse controller, if possible
         controller = doControllerCacheLookup(config, configFileName, pathStr, loopSteps);
         if isempty(controller)
@@ -159,11 +156,9 @@ function handle = ncs_initialize(maxSimTime, id, configStruct, filename)
     end
         
     sensor = initSensor(config);
-    if isfield(config, 'sensorEventBased') && config.sensorEventBased
-        ncsSensor = EventBasedNcsSensor(sensor);
-        if isfield(config, 'sensorMeasDelta')
-            ncsSensor.measurementDelta = config.sensorMeasDelta;
-        end
+    if getConfigValueOrDefault(config, 'sensorEventBased', false)
+        ncsSensor = EventBasedNcsSensor(sensor, ...
+            getConfigValueOrDefault(config, 'sensorMeasDelta', EventBasedNcsSensor.defaultMeasurementDelta));            
     else
         ncsSensor = NcsSensor(sensor);
     end
@@ -174,25 +169,21 @@ function handle = ncs_initialize(maxSimTime, id, configStruct, filename)
             'ncs_initialize:FilterClassNameMissing', ...
             ['** Variable <filterClassName> must be present in the configuration to init a filter/estimator '...
             'required by %s **'], class(controller));
-        ncsController = initNcsControllerWithFilter(config, controller, sensor, actuator);
+        ncsController = initNcsControllerWithFilter(config, controller, actuator);
     else
         % controller does not require an external filter
         ncsController = initNcsController(config, controller, actuator);
     end    
     
-    if isfield(config, 'controlErrorWindowSize')
-        ncsController.controlErrorWindowSize = config.controlErrorWindowSize;
-    end
-    
+    ncsController.controlErrorWindowSize = getConfigValueOrDefault(config, 'controlErrorWindowSize', ...
+        NcsController.defaultControlErrorWindowSize);
+     
     % init NCS: check if network type was specified
-    if isfield(config, 'networkType')
-        ncs = NetworkedControlSystem(ncsController, ncsPlant, ncsSensor, id, config.samplingInterval, config.networkType);
-    else
-        ncs = NetworkedControlSystem(ncsController, ncsPlant, ncsSensor, id, config.samplingInterval);
-    end
+    ncs = NetworkedControlSystem(ncsController, ncsPlant, ncsSensor, id, config.samplingInterval, ...
+        config.plantSamplingInterval, getConfigValueOrDefault(config, 'networkType', NetworkType.UdpLikeWithAcks));
     
     ncs.initPlant(config.initialPlantState);
-    ncs.initStatisticsRecording(loopSteps);
+    ncs.initStatisticsRecording(maxSimTime);
     
     if isfield(config, 'qocRateFunc') && isfield(config, 'controlErrorQocFunc')
         translator = NcsTranslator(config.qocRateFunc, config.controlErrorQocFunc, 1 / ncs.samplingInterval);
@@ -209,67 +200,47 @@ function handle = ncs_initialize(maxSimTime, id, configStruct, filename)
 end
 
 %% initNcsControllerWithFilter
-function ncsControllerWithFilter = initNcsControllerWithFilter(config, controller, sensor, actuator)
+function ncsControllerWithFilter = initNcsControllerWithFilter(config, controller, actuator)
     % we need a filter
-    [filter, augmentedPlantModel, sensorModel] = initFilter(config);
-    if ~isempty(augmentedPlantModel)
-        filterSpecificPlantModel = augmentedPlantModel;
-    else
-        filterSpecificPlantModel = plant;
-    end
-    if ~isempty(sensorModel)
-        filterSpecificSensorModel = sensorModel;
-    else
-        filterSpecificSensorModel = sensor;
-    end
-    if isfield(config, 'controllerEventBased') && config.controllerEventBased
-        if isfield(config, 'linearizationPoint')
-            ncsControllerWithFilter = EventBasedNcsControllerWithFilter(controller, filter, ...
-            filterSpecificPlantModel, filterSpecificSensorModel, actuator.defaultInput, config.caDelayProbs, config.linearizationPoint);
-        else
-            ncsControllerWithFilter = EventBasedNcsControllerWithFilter(controller, filter, ...
-            filterSpecificPlantModel, filterSpecificSensorModel, actuator.defaultInput, config.caDelayProbs);
-        end
-        % set the deadband, if provided (else default value is used)
-        if isfield(config, 'controllerDeadband')
-           ncsControllerWithFilter.deadband = config.controllerDeadband;
-        end
+    [filter, filterPlantModel, filterSensorModel] = initFilter(config);    
+    if getConfigValueOrDefault(config, 'controllerEventBased', false)
+        % event-based controller
+        defaultLinearizationPoint = [];
+        ncsControllerWithFilter = EventBasedNcsControllerWithFilter(controller, filter, ...
+                filterPlantModel, filterSensorModel, actuator.defaultInput, config.caDelayProbs, ...
+                getConfigValueOrDefault(config, 'linearizationPoint', defaultLinearizationPoint));
+        
+        % set the deadband if provided (else default value is used)
+        ncsControllerWithFilter.deadband = getConfigValueOrDefault(config, 'controllerDeadband', ...
+            EventBasedNcsControllerWithFilter.defaultDeadband);
         % set the event trigger, if provided (else default value is used)
-        if isfield(config, 'controllerEventTrigger')
-            ncsControllerWithFilter.eventTrigger = uint8(config.controllerEventTrigger);
-        end
-    elseif isfield(config, 'linearizationPoint')
-        ncsControllerWithFilter = NcsControllerWithFilter(controller, filter, ...
-            filterSpecificPlantModel, filterSpecificSensorModel, actuator.defaultInput, config.caDelayProbs, config.linearizationPoint);
+        ncsControllerWithFilter.eventTrigger = uint8(getConfigValueOrDefault(config, 'controllerEventTrigger', ...
+            EventBasedControllerTriggerCriterion.Sequence));        
     else
+        % linearization point might be given
         ncsControllerWithFilter = NcsControllerWithFilter(controller, filter, ...
-            filterSpecificPlantModel, filterSpecificSensorModel, actuator.defaultInput, config.caDelayProbs);
+            filterPlantModel, filterSensorModel, actuator.defaultInput, config.caDelayProbs, ...
+            getConfigValueOrDefault(config, 'linearizationPoint', []));
     end
 end
 
 %% initNcsController
 function ncsController = initNcsController(config, controller, actuator)
     % controller does not require an external filter
-     if isfield(config, 'controllerEventBased') && config.controllerEventBased
-         % we use an event-based controller with deadband strategy
-        if isfield(config, 'linearizationPoint')
-            ncsController = EventBasedNcsController(controller, actuator.defaultInput, config.linearizationPoint);
-         else
-             ncsController = EventBasedNcsController(controller, actuator.defaultInput);
-         end
-         % set the deadband, if provided (else default value is used)
-        if isfield(config, 'controllerDeadband')
-           ncsController.deadband = config.controllerDeadband;
-        end
-         % set the event trigger, if provided (else default value is used)
-        if isfield(config, 'controllerEventTrigger')
-            ncsController.eventTrigger = uint8(config.controllerEventTrigger);
-        end
-     elseif isfield(config, 'linearizationPoint')
-        ncsController = NcsController(controller, actuator.defaultInput, config.linearizationPoint);
-     else
-         ncsController = NcsController(controller, actuator.defaultInput);
-     end
+    if getConfigValueOrDefault(config, 'controllerEventBased', false)
+        % event-based controller
+        ncsController = EventBasedNcsController(controller, actuator.defaultInput, ...
+            getConfigValueOrDefault(config, 'linearizationPoint', []));
+        % set the deadband, if provided (else default value is used)
+        ncsController.deadband = getConfigValueOrDefault(config, 'controllerDeadband', ...
+            EventBasedNcsControllerWithFilter.defaultDeadband);
+        % set the event trigger, if provided (else default value is used)
+        ncsController.eventTrigger = uint8(getConfigValueOrDefault(config, 'controllerEventTrigger', ...
+            EventBasedControllerTriggerCriterion.Sequence)); 
+    else
+        ncsController = NcsController(controller, actuator.defaultInput, ...
+            getConfigValueOrDefault(config, 'linearizationPoint', []));
+    end    
 end
 
 %% doControllerCacheLookup
@@ -352,49 +323,64 @@ end
 
 %% initActuator
 function actuator = initActuator(config)
-    actuator = BufferingActuator(config.controlSequenceLength, ...
-        config.maxControlSequenceDelay, zeros(size(config.B,2), 1));
+    actuator = BufferingActuator(config.controlSequenceLength, zeros(size(config.B,2), 1));
 end
 
 %% initPlant
-function plant = initPlant(config)
-    if isfield(config, 'plant') && isa(config.plant, 'NonlinearPlant')
-        plant = config.plant;
-        if isa(config.plant, 'InvertedPendulum') && config.samplingInterval ~= plant.samplingInterval
+function [plant, configOut] = initPlant(configIn)
+    configOut = configIn;
+    switch class(configIn.plant)
+        case 'InvertedPendulum'
+            plant = configIn.plant;
+            % set the noise of the continuous-time linearization if present
+            plant.W_cont = getConfigValueOrDefault(configIn, 'W_cont', zeros(4));
             
-            plant.samplingInterval = config.samplingInterval;
-            [config.A, config.B, config.C, config.W] = plant.linearizeAroundUpwardEquilibrium(config.W_cont);
-                     
-            % use discrete-time noise also for the nonlinear plant dynamics
-            plant.setNoise(Gaussian(zeros(4, 1), config.W));
-            
+            % obtain discretized and linearized model used by controller
+            [configOut.A, configOut.B, configOut.C, configOut.W] = plant.linearizeAroundUpwardEquilibrium(configIn.samplingInterval);
+
+            % plant is simulated with sampling rate given in config
+            plant.samplingInterval = configIn.plantSamplingInterval;
+            if getConfigValueOrDefault(configIn, 'usePlantNoise', true)
+                % use the discrete-time noise also for simulation the nonlinear plant
+                % use discretization obtained using plant sampling rate
+                % based on value of W_cont
+                [~, ~, ~, W_d] = plant.linearizeAroundUpwardEquilibrium();
+                plant.setNoise(Gaussian(zeros(4, 1), W_d));
+            end
+%             % we also translate the cost function for a fair comparison
+%             Q_d = integral(@(x) expm(A_cont'*x) * configIn.Q * expm(A_cont*x), ...
+%                 0, configIn.samplingInterval, 'ArrayValued', true)
+%             R_d = configIn.samplingInterval * configIn.R + B_cont' * integral(@(tau) integral(@(s) expm(A_cont'*s), 0, tau, 'ArrayValued', true) * configIn.Q * integral(@(s) expm(A_cont*s), 0, tau, 'ArrayValued', true), ...
+%                 0, configIn.samplingInterval, 'ArrayValued', true) * B_cont
+%            
+%             % ensure symmetry
+%             configOut.Q = (Q_d + Q_d') / 2;
+%             configOut.R = (R_d + R_d') / 2;
+
             % enforce recomputation of controller, as A, B matrices changed
-            Cache.clear()
-        end
-    else
-        % use an ordinary linear plant
-        plant = LinearPlant(config.A, config.B, config.W);
-        % there might be an additional system noise matrix present (G)
-        % if not, default G = I is used
-        if isfield(config, 'G')
-            plant.setSystemNoiseMatrix(config.G);    
-        end
+            Cache.clear()            
+        case {'LinearPlant', 'NonlinearPlant'}
+            plant = configIn.plant;
+        otherwise
+            error('ncs_initialize:InitPlant:UnsupportedPlantClass', ...
+                '** Plant with name ''%s'' unsupported or unknown **',  configIn.plant);
     end
 end
 
 %% initSensor
 function sensor = initSensor(config)
     if isfield(config, 'sensor') && isa(config.sensor, 'LinearMeasurementModel')
+        % use the sensor/measurement model provided to create measurements
+        % during the simulation
         sensor = config.sensor;
     else
         % use an ordinary linear measurement model and assume Gaussian noise
+        assert(isfield(config, 'V'), ...
+            'ncs_initialize:InitSensor:MeasNoiseCovMissing', ...
+            '** Variable <V> must be present in the configuration to init a sensor producing noise-corrupted measurements **');
         sensor = LinearMeasurementModel(config.C);
-        if isfield(config, 'v_mean')
-            noiseMean = config.v_mean;
-        else
-            noiseMean = zeros(size(config.C, 1), 1);
-        end
-    sensor.setNoise(Gaussian(noiseMean, config.V))
+        
+        sensor.setNoise(Gaussian(getConfigValueOrDefault(config, 'v_mean', zeros(size(config.C, 1), 1)), config.V));        
     end
 end
 
@@ -402,8 +388,12 @@ end
 function controller = initController(config, horizonLength)
     switch config.controllerClassName
         case 'InfiniteHorizonController'
+            numCaModes = config.controlSequenceLength + 1; % number of modes of the augmented plant MJLS                
+            transitionMatrixCa = Utility.calculateDelayTransitionMatrix(...
+                Utility.truncateDiscreteProbabilityDistribution(config.caDelayProbs, numCaModes)); 
+            
             controller = InfiniteHorizonController(config.A, config.B, config.Q, config.R, ...
-                config.caDelayProbs, config.controlSequenceLength);
+                transitionMatrixCa, config.controlSequenceLength);
             if controller.status == -1
                 warning('ncs_initialize:InitController:InfiniteHorizonController', ...
                     ['** Warning: Numerical Problems: Gain of InfiniteHorizonController might ',...
@@ -414,6 +404,10 @@ function controller = initController(config, horizonLength)
                     'detected. Working with best gain found. **']);
             end
         case 'FiniteHorizonController'
+            numCaModes = config.controlSequenceLength + 1; % number of modes of the augmented plant MJLS                
+            transitionMatrixCa = Utility.calculateDelayTransitionMatrix(...
+                Utility.truncateDiscreteProbabilityDistribution(config.caDelayProbs, numCaModes)); 
+            
             useMex = true; % by default, use the mex implementation to compute the gains
             if isfield(config, 'stateConstraintWeightings')
                 assert(sum(isfield(config, {'inputConstraintWeightings', 'constraintBounds'})) == 2, ...
@@ -422,31 +416,39 @@ function controller = initController(config, horizonLength)
                     'must be present in the configuration to init the constrained FiniteHorizonController **']);
                 
                 controller = FiniteHorizonController(config.A, config.B, config.Q, config.R, ...
-                    config.caDelayProbs, config.controlSequenceLength, horizonLength, useMex, ...
+                    transitionMatrixCa, config.controlSequenceLength, horizonLength, useMex, ...
                     config.stateConstraintWeightings, config.inputConstraintWeightings, config.constraintBounds);
             else
                 % no constraints in use, unconstrained control task
                 controller = FiniteHorizonController(config.A, config.B, config.Q, config.R, ...
-                    config.caDelayProbs, config.controlSequenceLength, horizonLength, useMex);
+                    transitionMatrixCa, config.controlSequenceLength, horizonLength, useMex);
             end
         case 'LinearlyConstrainedPredictiveController'
-            assert(sum(isfield(config, {'stateConstraintWeightings', 'inputConstraintWeightings', ...
-                    'stateConstraints', 'inputConstraints'})) == 4, ...
-                'ncs_initialize:InitController:LinearlyConstrainedPredictiveController', ...
-                ['** Variables <stateConstraintWeightings>, <inputConstraintWeightings>, ' ...
-                '<stateConstraints> and <inputConstraints> '...
-                'must be present in the configuration to init LinearlyConstrainedPredictiveController **']);
+            if sum(isfield(config, {'stateConstraintWeightings', 'stateConstraints'})) == 2
+                stateConstraintWeightings = config.stateConstraintWeighting;
+                stateConstraints = config.stateConstraints;
+            else
+                stateConstraintWeightings = [];
+                stateConstraints = [];
+            end
+            if sum(isfield(config, {'inputConstraintWeightings', 'inputConstraints'})) == 2
+                inputConstraintWeightings = config.stateConstraintWeighting;
+                inputConstraints = config.inputConstraints;
+            else
+                inputConstraintWeightings = [];
+                inputConstraints = [];
+            end
             
             if sum(isfield(config, {'Z', 'refTrajectory'})) == 2
                 % we track a trajectory
                 controller = LinearlyConstrainedPredictiveController(config.A, config.B, config.Q, config.R, ...
-                    config.controlSequenceLength, config.stateConstraintWeightings, config.stateConstraints, ...
-                    config.inputConstraintWeightings, config.inputConstraints, config.Z, config.refTrajectory);
+                    config.controlSequenceLength, config.caDelayProbs, stateConstraintWeightings, stateConstraints, ...
+                    inputConstraintWeightings, inputConstraints, config.Z, config.refTrajectory);
             else
                 % we attempt to drive the state to the origin
                 controller = LinearlyConstrainedPredictiveController(config.A, config.B, config.Q, config.R, ...
-                    config.controlSequenceLength, config.stateConstraintWeightings, config.stateConstraints, ...
-                    config.inputConstraintWeightings, config.inputConstraints);
+                    config.controlSequenceLength, config.caDelayProbs, stateConstraintWeightings, stateConstraints, ...
+                    inputConstraintWeightings, inputConstraints);
             end
             if isfield(config, 'mpcHorizon')
                 controller.changeHorizonLength(config.mpcHorizon);
@@ -464,8 +466,12 @@ function controller = initController(config, horizonLength)
                 '** Variables <Z> and <refTrajectory> must be present in the configuration to init %s **', ...
                     'FiniteHorizonTrackingController');
             
+            numCaModes = config.controlSequenceLength + 1; % number of modes of the augmented plant MJLS                
+            transitionMatrixCa = Utility.calculateDelayTransitionMatrix(...
+                Utility.truncateDiscreteProbabilityDistribution(config.caDelayProbs, numCaModes));
+                
             controller = FiniteHorizonTrackingController(config.A, config.B, config.Q, config.R, config.Z, ...
-                config.caDelayProbs, config.controlSequenceLength, horizonLength, config.refTrajectory);
+                transitionMatrixCa, config.controlSequenceLength, horizonLength, config.refTrajectory);
         case 'EventTriggeredInfiniteHorizonController'
             assert(isfield(config, 'transmissionCosts'), ...
                 'ncs_initialize:InitController:EventTriggeredInfiniteHorizonController', ...
@@ -477,6 +483,20 @@ function controller = initController(config, horizonLength)
         case 'NominalPredictiveController'
             controller = NominalPredictiveController(config.A, config.B, config.Q, config.R, ...
                 config.controlSequenceLength);
+        case 'ExpectedInputPredictiveController'
+            controller = ExpectedInputPredictiveController(config.A, config.B, config.Q, config.R, ...
+                config.controlSequenceLength, config.caDelayProbs);
+        case 'ScenarioBasedPredictiveController'
+              controller = ScenarioBasedPredictiveController(config.plant, config.Q, config.R, config.controlSequenceLength, ...
+                  config.caDelayProbs);
+              controller.changeHorizonLength(config.mpcHorizon);
+        case 'PolePlacementPredictiveController'
+            assert(isfield(config, 'polesCont'), ...
+                'ncs_initialize:InitController:PolePlacementPredictiveController', ...
+                '** Variable <polesCont> must be present in the configuration to init %s **', ...
+                    'PolePlacementPredictiveController');
+            controller = PolePlacementPredictiveController(config.A, config.B, config.polesCont, ...
+                config.controlSequenceLength, config.samplingInterval);
         case 'InfiniteHorizonUdpLikeController'
             assert(isfield(config, 'scDelayProbs'), ...
                 'ncs_initialize:InitController:InfiniteHorizonUdpLikeController', ...
@@ -487,6 +507,11 @@ function controller = initController(config, horizonLength)
                 'ncs_initialize:InitController:InfiniteHorizonUdpLikeController', ...
                 '** Variable <initialEstimate> must be present in the configuration to init %s **', ...
                     'InfiniteHorizonUdpLikeController');
+            
+            assert(isfield(config, 'V'), ...
+                'ncs_initialize:InitController:InfiniteHorizonUdpLikeController', ...
+                '** Variable <V> must be present in the configuration to init %s **', ...
+                    'InfiniteHorizonUdpLikeController');
                 
             if isfield(config, 'G')
                 % transform the plant noise covariance
@@ -494,15 +519,11 @@ function controller = initController(config, horizonLength)
             else
                 actualW = config.W;
             end            
-            if isfield(config, 'v_mean')
-                controller = InfiniteHorizonUdpLikeController(config.A, config.B, config.C, config.Q, config.R, ...
-                    config.caDelayProbs, config.scDelayProbs, config.controlSequenceLength, config.maxMeasDelay, ...
-                    actualW, config.V, config.v_mean);
-            else
-                controller = InfiniteHorizonUdpLikeController(config.A, config.B, config.C, config.Q, config.R, ...
-                    config.caDelayProbs, config.scDelayProbs, config.controlSequenceLength, config.maxMeasDelay, ...
-                    actualW, config.V);
-            end
+
+            controller = InfiniteHorizonUdpLikeController(config.A, config.B, config.C, config.Q, config.R, ...
+                config.caDelayProbs, config.scDelayProbs, config.controlSequenceLength, config.maxMeasDelay, ...
+                actualW, config.V, getConfigValueOrDefault(config, 'v_mean', zeros(size(config.V, 1), 1)));
+
             controller.setControllerPlantState(config.initialEstimate);
         case 'IMMBasedRecedingHorizonController'
             assert(isfield(config, 'initialEstimate'), ...
@@ -510,18 +531,19 @@ function controller = initController(config, horizonLength)
                 '** Variable <initialEstimate> must be present in the configuration to init %s **', ...
                     'IMMBasedRecedingHorizonController');
             
+            assert(isfield(config, 'V'), ...
+                'ncs_initialize:InitController:IMMBasedRecedingHorizonController', ...
+                '** Variable <V> must be present in the configuration to init %s **', ...
+                    'IMMBasedRecedingHorizonController');
+                
             if isfield(config, 'G')
                 % transform the plant noise covariance
                 actualW = config.G * config.W * config.G';
             else
                 actualW = config.W;
             end
-            if isfield(config, 'v_mean')
-                v_mean = config.v_mean;
-            else
-                v_mean = zeros(size(config.C, 1), 1);
-            end
-            measNoise = Gaussian(v_mean, config.V);
+            
+            measNoise = Gaussian(getConfigValueOrDefault(config, 'v_mean', zeros(size(config.V, 1), 1)), config.V);
             [x0, x0Cov] = config.initialEstimate.getMeanAndCov();
             if isfield(config, 'mpcHorizon')
                 controllerHorizonLength = config.mpcHorizon;
@@ -531,8 +553,12 @@ function controller = initController(config, horizonLength)
                     'IMMBasedRecedingHorizonController', config.controlSequenceLength);
                 controllerHorizonLength = config.controlSequenceLength;
             end
+            numCaModes = config.controlSequenceLength + 1; % number of modes of the augmented plant MJLS    
+            modeTransitionProbs = Utility.truncateDiscreteProbabilityDistribution(config.caDelayProbs, numCaModes);    
+            transitionMatrixCa = Utility.calculateDelayTransitionMatrix(modeTransitionProbs); 
+            
             controller = IMMBasedRecedingHorizonController(config.A, config.B, config.C, config.Q, config.R, ...
-                    config.caDelayProbs, config.controlSequenceLength, config.maxMeasDelay, actualW, measNoise, ...
+                    transitionMatrixCa, config.controlSequenceLength, config.maxMeasDelay, actualW, measNoise, ...
                     controllerHorizonLength, x0, x0Cov);
         case 'RecedingHorizonUdpLikeController'
             assert(isfield(config, 'initialEstimate'), ...
@@ -542,6 +568,10 @@ function controller = initController(config, horizonLength)
             assert(isfield(config, 'scDelayProbs'), ...
                 'ncs_initialize:InitController:RecedingHorizonUdpLikeController', ...
                 '** Variable <scDelayProbs> must be present in the configuration to init %s **', ...
+                    'RecedingHorizonUdpLikeController');
+            assert(isfield(config, 'V'), ...
+                'ncs_initialize:InitController:RecedingHorizonUdpLikeController', ...
+                '** Variable <V> must be present in the configuration to init %s **', ...
                     'RecedingHorizonUdpLikeController');
                
             if isfield(config, 'G')
@@ -560,9 +590,19 @@ function controller = initController(config, horizonLength)
                     'RecedingHorizonUdpLikeController', config.controlSequenceLength);
                 controllerHorizonLength = config.controlSequenceLength;
             end
+            numCaModes = config.controlSequenceLength + 1; % number of modes of the augmented plant MJLS    
+            modeTransitionProbs = Utility.truncateDiscreteProbabilityDistribution(config.caDelayProbs, numCaModes);    
+            transitionMatrixCa = Utility.calculateDelayTransitionMatrix(modeTransitionProbs); 
+            
             controller = RecedingHorizonUdpLikeController(config.A, config.B, config.C, config.Q, config.R, ...
-                config.caDelayProbs, scDelayProbs, config.controlSequenceLength, ...
-                config.maxMeasDelay, actualW, config.V, controllerHorizonLength, x0, x0Cov);
+                transitionMatrixCa, scDelayProbs, config.controlSequenceLength, ...
+                config.maxMeasDelay, actualW, config.V, controllerHorizonLength, x0, x0Cov, true);
+        case 'MSSController'
+            controllerDelta = 0.1; % to be promoted to configuration parameter
+            %controller = MSSController(config.A, config.B, config.controlSequenceLength, controllerDelta);
+            [x0, ~] = config.initialEstimate.getMeanAndCov();
+            controller = DynamicMSSController(config.A, config.B, config.C, config.controlSequenceLength, ...
+                controllerDelta, config.maxMeasDelay, x0);
         otherwise
             error('ncs_initialize:InitController:UnsupportedControllerClass', ...
                 '** Controller class with name ''%s'' unsupported or unknown **', config.controllerClassName);
@@ -574,6 +614,9 @@ function [filter, filterPlantModel, filterSensorModel] = initFilter(config)
     assert(isfield(config, 'initialEstimate'), ...
         'ncs_initialize:InitFilter:InitialEstimateMissing', ...
         '** Variable <initialEstimate> must be present in the configuration to init a filter/estimator **');
+    assert(isfield(config, 'V'), ...
+        'ncs_initialize:InitFilter:MeasNoiseCovMissing', ...
+        '** Variable <V> must be present in the configuration to init a filter/estimator **');
     
     caDelayProbs = config.caDelayProbs;
     Validator.validateDiscreteProbabilityDistribution(caDelayProbs);    
@@ -587,26 +630,18 @@ function [filter, filterPlantModel, filterSensorModel] = initFilter(config)
     switch config.filterClassName
         case 'DelayedKF'
             delayWeights = Utility.computeStationaryDistribution(transitionMatrix);
-            filter = DelayedKF(config.maxMeasDelay);
+            filter = DelayedKF(config.maxMeasDelay, transitionMatrix);
             
             filterPlantModel = DelayedKFSystemModel(config.A, ...
                 config.B, Gaussian(zeros(size(config.A, 1), 1), config.W), ...
                 numModes, config.maxMeasDelay, delayWeights);
             if isfield(config, 'G')
                 filterPlantModel.setSystemNoiseMatrix(config.G);
-            end
-            % use linear measurement model and assume Gaussian noise
-            filterSensorModel = LinearMeasurementModel(config.C);
-            if isfield(config, 'v_mean')
-                noiseMean = config.v_mean;
-            else
-                noiseMean = zeros(size(config.C, 1), 1);
-            end
-            filterSensorModel.setNoise(Gaussian(noiseMean, config.V))
+            end 
         case 'DelayedModeIMMF'
             modeFilters = arrayfun(@(mode) EKF(sprintf('KF for mode %d', mode)), 1:numModes, 'UniformOutput', false);
             filter = DelayedModeIMMF(modeFilters, transitionMatrix, config.maxMeasDelay);
-            
+             
             filterPlantModel = JumpLinearSystemModel(numModes, ...
                 arrayfun(@(~) LinearPlant(config.A, config.B, config.W), ...
                     1:numModes, 'UniformOutput', false));
@@ -614,36 +649,26 @@ function [filter, filterPlantModel, filterSensorModel] = initFilter(config)
                 % add the G matrix to all mode-conditioned models
                 cellfun(@(model) model.setSystemNoiseMatrix(config.G), filterPlantModel.modeSystemModels);
             end
-             % use linear measurement model and assume Gaussian noise
-            filterSensorModel = LinearMeasurementModel(config.C);
-            if isfield(config, 'v_mean')
-                noiseMean = config.v_mean;
-            else
-                noiseMean = zeros(size(config.C, 1), 1);
-            end
-            filterSensorModel.setNoise(Gaussian(noiseMean, config.V))
-        case 'DelayedIMMF'
-            modeFilters = arrayfun(@(mode) EKF(sprintf('KF for mode %d', mode)), 1:numModes, 'UniformOutput', false);
-            filter = DelayedIMMF(modeFilters, transitionMatrix, config.maxMeasDelay);
-
-            filterPlantModel = JumpLinearSystemModel(numModes, ...
-                arrayfun(@(~) LinearPlant(config.A, config.B, config.W), ...
-                    1:numModes, 'UniformOutput', false));
-            if isfield(config, 'G')
-                % add the G matrix to all mode-conditioned models
-                cellfun(@(model) model.setSystemNoiseMatrix(config.G), filterPlantModel.modeSystemModels);
-            end
-            % use linear measurement model and assume Gaussian noise
-            filterSensorModel = LinearMeasurementModel(config.C);
-            if isfield(config, 'v_mean')
-                noiseMean = config.v_mean;
-            else
-                noiseMean = zeros(size(config.C, 1), 1);
-            end
-            filterSensorModel.setNoise(Gaussian(noiseMean, config.V))
         otherwise
             error('ncs_initialize:InitFilter:UnsupportedFilterClass', ...
                 '** Filter class with name ''%s'' unsupported or unknown **', config.filterClassName);
+    end
+    % use linear measurement model
+    filterSensorModel = LinearMeasurementModel(config.C);
+    fields = isfield(config, {'v_mean', 'V'});
+    if fields(1)
+        noiseMean = config.v_mean;
+    else
+        noiseMean = zeros(size(config.C, 1), 1);
+    end
+    if fields(2)
+        % noise cov was given, so assume a Gaussion noise
+        filterSensorModel.setNoise(Gaussian(noiseMean, config.V))
+    else
+        % noise is a mere static offset
+        % probabilistically modeled in the form of a Dirac mixture
+        % with a single component
+        filterSensorModel.setNoise(DiracMixture(noiseMean, 1));
     end
     filter.setState(config.initialEstimate);
 end
@@ -690,3 +715,11 @@ function checkConfig(config, expectedVariables)
          numel(notFoundIdx), strjoin(expectedVariables(notFoundIdx), ','));     
 end
 
+%% getConfigValueOrDefault
+function value = getConfigValueOrDefault(config, fieldname, defaultValue)
+    if isfield(config, fieldname)
+        value = config.(fieldname);        
+    else
+        value = defaultValue;
+    end
+end

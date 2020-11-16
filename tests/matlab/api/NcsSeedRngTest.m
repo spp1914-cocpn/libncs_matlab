@@ -7,7 +7,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2018  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2018-2020  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -39,21 +39,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
         end
     end
     
-    methods (Test)
-        %% testInvalidSeed
-        function testInvalidSeed(this)
-            expectedErrId = 'ncs_seedRng:InvalidSeed';
-            
-            invalidSeed = [-1 -1]; % not a scalar            
-            this.verifyError(@() ncs_seedRng(invalidSeed), expectedErrId);
-            
-            invalidSeed = -42; % not nonnegative           
-            this.verifyError(@() ncs_seedRng(invalidSeed), expectedErrId);
-            
-            invalidSeed = -42; % not an integer            
-            this.verifyError(@() ncs_seedRng(invalidSeed), expectedErrId);
-        end
-        
+    methods (Test)        
         %% test
         function test(this)
             % retrieve the settings

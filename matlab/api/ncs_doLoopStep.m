@@ -49,9 +49,6 @@ function [pktsOut, qocOut, stats] = ncs_doLoopStep(handle, timestamp, paramStruc
     %      - estimated_control_error (Nonnegative scalar), indicating the value of the error measure as perceived/estimated by the controller
     %      - actual_stagecosts (Nonnegative scalar), indicating the current
     %        stage costs according the controller's underlying cost functional
-    %      - plant_state_admissible (Logical, i.e., a flag), indicating
-    %        whether the current true plant state is admissible (e.g., does
-    %        not violate any constraints)
     %      - sc_delays (Column vector of nonnegative integers, might be empty), 
     %        describing the delays (in time steps) the processed DataPackets sent from the sensor experienced
     %      - ca_delays (Column vector of nonnegative integers, might be empty), 
@@ -95,7 +92,6 @@ function [pktsOut, qocOut, stats] = ncs_doLoopStep(handle, timestamp, paramStruc
     scPackets = [];
     acPackets = [];
     %csPackets = [];
-    timestep = convertToTimeStep(ncs, timestamp);
     packetBuffer = DataPacketBuffer.getInstance();
     % get the packets from the buffer and group by destination address
     % caPackets (actuator idx = 1)
@@ -113,7 +109,6 @@ function [pktsOut, qocOut, stats] = ncs_doLoopStep(handle, timestamp, paramStruc
                             assert(packet.isAck, ...
                                 'ncs_doLoopStep:InvalidACKPacket', ...
                                 '** Packet from 1 (actuator) to 2 (controller) should be an ACK **');
-                            
                             acPackets = [acPackets, packet]; %#ok
                         case 3
                             scPackets = [scPackets, packet]; %#ok
@@ -126,53 +121,51 @@ function [pktsOut, qocOut, stats] = ncs_doLoopStep(handle, timestamp, paramStruc
                 otherwise
                    issueErrorInvalidDestinationAddress(packet.destinationAddress); 
             end
-            % store the delay the packet experienced (in time steps)
-            packet.packetDelay = timestep - packet.timeStamp;
         end
         packetBuffer.clear(handle);
+    end   
+    
+    if isfield(paramStruct, 'samplingInterval')
+        ncs.changeControllerSamplingInterval(paramStruct.samplingInterval);
     end
-
-    % process the params passed additionally here
-    if isfield(paramStruct, 'sensorMeasDelta') && ncs.sensor.isEventBased
-        ncs.sensor.measurementDelta = paramStruct.sensorMeasDelta;
-    end
+    
+%     if isfield(paramStruct, 'sensorMeasDelta') && ncs.sensor.isEventBased
+%         ncs.sensor.measurementDelta = paramStruct.sensorMeasDelta;
+%     end
     if isfield(paramStruct, 'caDelayProbs')
         ncs.changeControllerCaDelayProbs(paramStruct.caDelayProbs);
     end
-    if isfield(paramStruct, 'controlSequenceLength') 
-        ncs.changeControllerSequenceLength(double(paramStruct.controlSequenceLength));
-    end
+%     if isfield(paramStruct, 'controlSequenceLength') 
+%         ncs.changeControllerSequenceLength(double(paramStruct.controlSequenceLength));
+%     end
     
-    [controllerActuatorPacket, sensorControllerPacket, controllerAck] ...
-        = ncs.step(timestep, scPackets, caPackets, acPackets);
+    [controllerActuatorPacket, sensorControllerPacket, controllerAcks] ...
+        = ncs.step(double(timestamp), scPackets, caPackets, acPackets);
 
-    pktsOut = constructPacketsToSend(controllerActuatorPacket, sensorControllerPacket, controllerAck);
-    % get the QoC, as perceived by the controller, to be used by the
-    % congestion control
-    [~, qocOut] = ncs.getQualityOfControl(timestep);
+    pktsOut = constructPacketsToSend(controllerActuatorPacket, sensorControllerPacket, controllerAcks);
+
     % also, forward some gathered data
-    [stats.actual_control_error, stats.estimated_control_error] = ncs.getControlError(timestep);
-    stats.actual_stagecosts = ncs.getStageCosts(timestep);
-    stats.plant_state_admissible = ncs.isPlantStateAdmissible(timestep);
+    [stats.actual_control_error, stats.estimated_control_error] = ncs.getCurrentControlError();
+    stats.actual_stagecosts = ncs.getCurrentStageCosts();
+    
     % determine if sensor and/or controller do not send this time
     % determine if actuator sent out an ACK
     stats.sc_sent = ~isempty(sensorControllerPacket);
     stats.ca_sent = ~isempty(controllerActuatorPacket);
-    stats.ac_sent = ~isempty(controllerAck);
+    stats.ac_sent = ~isempty(controllerAcks);
     % record the delays of the processed packets: column vector or empty matrix
     stats.sc_delays = arrayfun(@(p) p.packetDelay, scPackets)';
     stats.ca_delays = arrayfun(@(p) p.packetDelay, caPackets)';
     stats.ac_delays = arrayfun(@(p) p.packetDelay, acPackets)';
-end
-
-%% convertToTimeStep
-function timestep = convertToTimeStep(ncs, timestamp)
-    timestep = double(timestamp / ConvertToPicoseconds(ncs.samplingInterval));
+        
+    % get the QoC, as perceived by the controller, to be used by the
+    % congestion control
+    [~, qocOut] = ncs.getCurrentQualityOfControl();
 end
 
 %% constructPacketsToSend
-function packetsOut = constructPacketsToSend(controllerActuatorPacket, sensorControllerPacket, controllerAck)
-    packets = controllerAck;
+function packetsOut = constructPacketsToSend(controllerActuatorPacket, sensorControllerPacket, controllerAcks)
+    packets = controllerAcks;
     if ~isempty(controllerActuatorPacket)
         packets = [packets; controllerActuatorPacket];
     end

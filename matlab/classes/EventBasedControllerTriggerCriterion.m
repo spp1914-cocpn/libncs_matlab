@@ -6,7 +6,7 @@ classdef EventBasedControllerTriggerCriterion < uint8
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2018  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2018-2020  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -47,7 +47,8 @@ classdef EventBasedControllerTriggerCriterion < uint8
                     newU = sendData.sequence(:, 1:(end-timeDiff));
                     oldU = lastSentData.sequence(:, timeDiff+1:end);
                    
-                    maxChange = max(sqrt(sum((newU-oldU).^2, 1)) ./ sqrt(sum(newU.^2, 1)));
+                    %maxChange = max(sqrt(sum((newU-oldU).^2, 1)) ./ sqrt(sum(newU.^2, 1)));
+                    maxChange = max(vecnorm(newU - oldU));
                     % vecnorm function available with R2017b
                     ret = maxChange > threshold;
                 case EventBasedControllerTriggerCriterion.ControlError

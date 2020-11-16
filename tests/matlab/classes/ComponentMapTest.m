@@ -7,7 +7,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2017-2019  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2017-2020  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -59,16 +59,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
         
     end
     
-    methods (Test)
-        %% testAddComponentInvalidComponent
-        function testAddComponentInvalidComponent(this)
-            expectedErrId = 'ComponentMap:ComponentNotAHandle';
-            
-            invalidComponent.a = 42; % not a handle, but a struct
-            this.verifyError(@() this.componentMapUnderTest.addComponent(invalidComponent), expectedErrId);
-            
-        end
-        
+    methods (Test)        
         %% testAddComponentAlreadyPresent
         function testAddComponentAlreadyPresent(this)
             % add a component to the map, then try to add it again

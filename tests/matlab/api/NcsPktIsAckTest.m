@@ -7,7 +7,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2018  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2018-2020  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -47,18 +47,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
         end
     end
     
-    methods (Test)
-        %% testInvalidDataPacket
-        function testInvalidDataPacket(this)
-            expectedErrId = 'ncs_pktIsAck:InvalidPacket';
-            
-            invalidPacket = this; % not a data packet
-            this.verifyError(@() ncs_pktIsAck(invalidPacket), expectedErrId);
-            
-            invalidPacket = [this.ackPacket; this.ackPacket]; % not a single data packet
-            this.verifyError(@() ncs_pktIsAck(invalidPacket), expectedErrId);
-        end
-        
+    methods (Test)        
         %% test
         function test(this)
             isAck = ncs_pktIsAck(this.ackPacket);

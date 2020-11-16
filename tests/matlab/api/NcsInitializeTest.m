@@ -7,7 +7,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2018-2019  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2018-2020  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -90,7 +90,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             this.controlSeqLength = 5;
             this.maxMeasDelay = 10;
             this.maxControlSequenceDelay = 10;
-            this.caDelayProbs = [0.5 0.5];
+            this.caDelayProbs = [0.5 0.4 0.1];
             this.initialPlantState = zeros(this.dimX, 1); % plant state is already at the origin
             this.controllerClassName = 'NominalPredictiveController';
             
@@ -101,7 +101,8 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             this.matFilename = [pwd filesep 'test.mat'];
             
             configFile = matfile(this.matFilename, 'Writable', true);
-            configFile.A = this.A;
+            % A, B, in config describe plant model as used by controller
+            configFile.A = this.A; 
             configFile.B = this.B;
             configFile.C = this.C;
             configFile.W = this.W;
@@ -109,9 +110,12 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             configFile.Q = this.Q;
             configFile.R = this.R;
             configFile.samplingInterval = this.samplingInterval;
+            configFile.plantSamplingInterval = this.samplingInterval;
             configFile.controlSequenceLength = this.controlSeqLength;
             configFile.maxMeasDelay = this.maxMeasDelay;
             configFile.maxControlSequenceDelay = this.maxControlSequenceDelay;
+            
+            configFile.plant = LinearPlant(this.A, this.B, this.W);
             
             this.configStruct.controllerClassName = this.controllerClassName;
             this.configStruct.initialPlantState = this.initialPlantState;
@@ -279,19 +283,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             this.configStruct.controllerClassName = 'FiniteHorizonTrackingController';
             this.verifyError(@() ncs_initialize(this.maxSimTime, this.id, this.configStruct, this.matFilename), ...
                 expectedErrId);
-        end
-        
-        %% testInvalidLinearlyConstrainedPredictiveController
-        function testInvalidLinearlyConstrainedPredictiveController(this)
-            expectedErrId = 'ncs_initialize:InitController:LinearlyConstrainedPredictiveController';
-            
-             % we add constraint weightings, but no bounds
-            this.configStruct.stateConstraintWeightings = ones(this.dimX, this.dimX, 2);
-            this.configStruct.inputConstraintWeightings = ones(this.dimU, this.dimU, 2);
-            this.configStruct.controllerClassName = 'LinearlyConstrainedPredictiveController';
-            this.verifyError(@() ncs_initialize(this.maxSimTime, this.id, this.configStruct, this.matFilename), ...
-                expectedErrId);              
-        end
+        end      
         
         %% testInvalidEventTriggeredInfiniteHorizonController
         function testInvalidEventTriggeredInfiniteHorizonController(this)
@@ -364,6 +356,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
         function test(this)
             this.configStruct.filterClassName = 'DelayedModeIMMF';
             this.configStruct.initialEstimate = Gaussian(zeros(this.dimX, 1), eye(this.dimX));
+            this.configStruct.plantSamplingInterval = this.samplingInterval / 10; % make the plant 10 times faster
             
             ncsHandle = ncs_initialize(this.maxSimTime, this.id, this.configStruct, this.matFilename);
             
@@ -374,6 +367,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             % check some params of the contructed NCS
             this.verifyEqual(ncs.networkType, NetworkType.UdpLikeWithAcks);
             this.verifyEqual(ncs.samplingInterval, this.samplingInterval);
+            this.verifyEqual(ncs.plantSamplingInterval, this.samplingInterval / 10);
             this.verifyEqual(ncs.name, this.id);
             
             this.verifyClass(ncs.controller, ?NcsControllerWithFilter);
@@ -540,6 +534,8 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             timestep = 1;
             caPackets = [];
             
+            % we use a different plant now
+            this.configStruct.plant = LinearPlant(this.A, this.B, this.W, expectedSysNoiseMatrix);
             this.configStruct.filterClassName = 'DelayedModeIMMF';
             this.configStruct.initialEstimate = Gaussian(expectedMean, eye(this.dimX));
             this.configStruct.controllerEventBased = false; 
@@ -549,7 +545,8 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             ncs = ComponentMap.getInstance().getComponent(ncsHandle);
 
             % no inputs applied
-            [~, ~, newPlantState] = ncs.plant.step(timestep, caPackets, plantState);
+            ncs.plant.init(plantState);
+            newPlantState = ncs.plant.plantStep(timestep);
           
             % check if the state evolved correctly; noise affects only
             % first component
@@ -735,6 +732,159 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             this.verifyEqual(ncs.controller.eventTrigger, expectedControllerEventTrigger);
                      
             this.verifyEqual(ncs.controlSequenceLength, this.controlSeqLength);
+        end
+        
+        %% testPlantInvertedPendulum
+        function testPlantInvertedPendulum(this)
+            expectedSamplingInterval = this.samplingInterval / 2;
+            expectedPlantSamplingInterval = this.samplingInterval / 2;
+            expectedWcont = eye(4);
+            
+            pendulum = InvertedPendulum(1, 1, 1, 0.1, this.samplingInterval);
+            pendulum.W_cont = expectedWcont;
+            pendulumCopyNoNoise = InvertedPendulum(1, 1, 1, 0.1, this.samplingInterval);
+            
+            expectedPlantStateOrigin = [0 0 pi 0]'; % pendulum state is 4-dimensional
+            
+            [A_d, B_d, C_d, W_d] = pendulum.linearizeAroundUpwardEquilibrium(); % discrete time matrices
+            [expA, expB, ~] = pendulum.linearizeAroundUpwardEquilibrium(expectedSamplingInterval);
+                                           
+            this.configStruct.A = A_d;
+            this.configStruct.B = B_d;
+            this.configStruct.C = C_d;
+            this.configStruct.W = W_d;
+            this.configStruct.V = eye(2); % two-dimensional measurements
+            this.configStruct.samplingInterval = expectedSamplingInterval;
+            this.configStruct.plantSamplingInterval = expectedPlantSamplingInterval;
+            this.configStruct.Q = eye(4);
+            this.configStruct.R = 100;
+            this.configStruct.linearizationPoint = expectedPlantStateOrigin;
+            this.configStruct.plant = pendulumCopyNoNoise;
+            this.configStruct.W_cont = expectedWcont; % inject the noise into the config here
+            this.configStruct.initialPlantState = zeros(4, 1); % initial pendulum state
+            
+            this.configStruct.controllerClassName = 'NominalPredictiveController';
+            this.configStruct.filterClassName = 'DelayedKF';
+            this.configStruct.initialEstimate = Gaussian(zeros(4, 1), eye(4));
+            expectedGain = -dlqr(expA, expB, this.configStruct.Q, this.configStruct.R);
+            
+            ncsHandle = ncs_initialize(this.maxSimTime, this.id, this.configStruct, this.matFilename);
+            
+            ncs = ComponentMap.getInstance().getComponent(ncsHandle);            
+            this.verifyClass(ncs, ?NetworkedControlSystem);
+            
+            % check some params of the contructed NCS
+            this.verifyEqual(ncs.networkType, NetworkType.UdpLikeWithAcks);            
+            this.verifyEqual(ncs.name, this.id);
+            this.verifyEqual(ncs.samplingInterval, expectedSamplingInterval);
+            this.verifyEqual(ncs.plantSamplingInterval, expectedPlantSamplingInterval);
+            
+            this.verifyClass(ncs.controller, ?NcsControllerWithFilter);
+            this.verifyClass(ncs.controller.controller, ?NominalPredictiveController);
+            this.verifyEqual(ncs.controller.controller.L, expectedGain, 'AbsTol', 1e-8);
+            this.verifyEqual(ncs.controlSequenceLength, this.controlSeqLength)
+            
+            this.verifyClass(ncs.plant, ?NcsPlant);
+            this.verifyClass(ncs.plant.plant, ?InvertedPendulum);
+            this.verifyEqual(ncs.plant.plant.samplingInterval, expectedPlantSamplingInterval);
+            this.verifyEqual(ncs.plant.plant.W_cont, expectedWcont); % noise in the continuous-time linearization
+            
+            % by default, plant is simulated with noise
+            [A_cont, ~, ~, ~] = pendulum.linearizeAroundUpwardEquilibriumCont();
+             expectedWdisc = integral(@(x) expm(A_cont*x) * expectedWcont * expm(A_cont'*x), ...
+                    0, expectedPlantSamplingInterval, 'ArrayValued', true);  
+            this.verifyClass(ncs.plant.plant.noise, ?Gaussian);
+            [plantNoiseMean, plantNoiseCov] = ncs.plant.plant.noise.getMeanAndCov();
+            this.verifyEqual(plantNoiseMean, zeros(4, 1));
+            this.verifyEqual(plantNoiseCov, expectedWdisc, 'AbsTol', 1e-8);
+            
+            % finally, check the measurement noise assumed by the
+            % controller/filter
+            this.verifyClass(ncs.controller.measModel, ?LinearMeasurementModel);
+            this.verifyClass(ncs.controller.measModel.noise, ?Gaussian);
+            [measNoiseMean, measNoiseCov] = ncs.controller.measModel.noise.getMeanAndCov();
+            this.verifyEqual(measNoiseMean, zeros(2, 1));
+            this.verifyEqual(measNoiseCov, this.configStruct.V);
+        end
+        
+        %% testPlantInvertedPendulumNoProcessNoise
+        function testPlantInvertedPendulumNoProcessNoise(this)
+            expectedSamplingInterval = this.samplingInterval / 2;
+            expectedPlantSamplingInterval = this.samplingInterval / 2;
+            expectedWcont = eye(4);
+            
+            pendulum = InvertedPendulum(1, 1, 1, 0.1, this.samplingInterval);
+            pendulum.W_cont = expectedWcont;
+            pendulumCopyNoNoise = InvertedPendulum(1, 1, 1, 0.1, this.samplingInterval);
+            
+            expectedPlantStateOrigin = [0 0 pi 0]'; % pendulum state is 4-dimensional
+            
+            [A_d, B_d, C_d, W_d] = pendulum.linearizeAroundUpwardEquilibrium(); % discrete time matrices
+            [expA, expB, ~] = pendulum.linearizeAroundUpwardEquilibrium(expectedSamplingInterval);
+                                           
+            this.configStruct.A = A_d;
+            this.configStruct.B = B_d;
+            this.configStruct.C = C_d;
+            this.configStruct.W = W_d;
+            this.configStruct.V = eye(2); % two-dimensional measurements
+            this.configStruct.samplingInterval = expectedSamplingInterval;
+            this.configStruct.plantSamplingInterval = expectedPlantSamplingInterval;
+            this.configStruct.Q = eye(4);
+            this.configStruct.R = 100;
+            this.configStruct.linearizationPoint = expectedPlantStateOrigin;
+            this.configStruct.plant = pendulumCopyNoNoise;
+            this.configStruct.W_cont = expectedWcont; % inject the noise into the config here
+            this.configStruct.initialPlantState = zeros(4, 1); % initial pendulum state
+            %the pendulum shall be simulated without process noise
+            this.configStruct.usePlantNoise = false;
+            
+            this.configStruct.controllerClassName = 'NominalPredictiveController';
+            this.configStruct.filterClassName = 'DelayedKF';
+            this.configStruct.initialEstimate = Gaussian(zeros(4, 1), eye(4));
+            expectedGain = -dlqr(expA, expB, this.configStruct.Q, this.configStruct.R);
+            
+            ncsHandle = ncs_initialize(this.maxSimTime, this.id, this.configStruct, this.matFilename);
+            
+            ncs = ComponentMap.getInstance().getComponent(ncsHandle);            
+            this.verifyClass(ncs, ?NetworkedControlSystem);
+            
+            % check some params of the contructed NCS
+            this.verifyEqual(ncs.networkType, NetworkType.UdpLikeWithAcks);            
+            this.verifyEqual(ncs.name, this.id);
+            this.verifyEqual(ncs.samplingInterval, expectedSamplingInterval);
+            this.verifyEqual(ncs.plantSamplingInterval, expectedPlantSamplingInterval);
+            
+            this.verifyClass(ncs.controller, ?NcsControllerWithFilter);
+            this.verifyClass(ncs.controller.controller, ?NominalPredictiveController);
+            this.verifyEqual(ncs.controller.controller.L, expectedGain, 'AbsTol', 1e-8);
+            this.verifyEqual(ncs.controlSequenceLength, this.controlSeqLength)
+            
+            this.verifyClass(ncs.plant, ?NcsPlant);
+            this.verifyClass(ncs.plant.plant, ?InvertedPendulum);
+            this.verifyEqual(ncs.plant.plant.samplingInterval, expectedPlantSamplingInterval);
+            this.verifyEqual(ncs.plant.plant.W_cont, expectedWcont); % noise in the continuous-time linearization
+            
+            % the plant shall be simulated with noise, but the filter uses
+            % noise
+            [A_cont, ~, ~, ~] = pendulum.linearizeAroundUpwardEquilibriumCont();
+            expectedWFilter = integral(@(x) expm(A_cont*x) * expectedWcont * expm(A_cont'*x), ...
+                    0, expectedSamplingInterval, 'ArrayValued', true);
+            
+            this.verifyEmpty(ncs.plant.plant.noise);
+            
+            this.verifyClass(ncs.controller.plantModel, ?DelayedKFSystemModel);
+            this.verifyClass(ncs.controller.plantModel.noise, ?Gaussian);
+            [filterNoiseMean, filterNoiseCov] = ncs.controller.plantModel.noise.getMeanAndCov();
+            this.verifyEqual(filterNoiseMean, zeros(4, 1));
+            this.verifyEqual(filterNoiseCov, expectedWFilter, 'AbsTol', 1e-8);
+            
+            % finally, check the measurement noise assumed by the
+            % controller/filter
+            this.verifyClass(ncs.controller.measModel, ?LinearMeasurementModel);
+            this.verifyClass(ncs.controller.measModel.noise, ?Gaussian);
+            [measNoiseMean, measNoiseCov] = ncs.controller.measModel.noise.getMeanAndCov();
+            this.verifyEqual(measNoiseMean, zeros(2, 1));
+            this.verifyEqual(measNoiseCov, this.configStruct.V);
         end
     end
 end

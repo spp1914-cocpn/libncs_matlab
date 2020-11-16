@@ -1,15 +1,16 @@
-function dstAddr = ncs_pktGetDstAddr(packet)
-    % Translate the destination address (i.e., the index of a NCS component) of the given DataPacket (Matlab) 
-    % into a valid address of a raw network packet (Omnet).
+function plantInterval = ncs_getPlantTickerInterval(handle)
+    % Gets the ticker interval (sampling interval) (in pico-seconds) of the plant a networked control
+    % system, i.e., the period between two invocations of the plant
+    % dynamics.
     %
     % Parameters:
-    %   >> packet (DataPacket)
-    %      A DataPacket instance. 
+    %   >> handle (Key into ComponentMap)
+    %      A handle (key into ComponentMap) which uniquely identifies a NetworkedControlSystem instance.
     %
     % Returns:
-    %   << dstAddr (Nonnegative integer)
-    %      A nonnegative integer, the translated destination address.
-
+    %   << plantInterval (Nonnegative integer)
+    %      The ticker interval, expressed in pico-seconds. 
+    
     %    This program is free software: you can redistribute it and/or modify
     %    it under the terms of the GNU General Public License as published by
     %    the Free Software Foundation, either version 3 of the License, or
@@ -23,12 +24,9 @@ function dstAddr = ncs_pktGetDstAddr(packet)
     %    You should have received a copy of the GNU General Public License
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
     
-	% return destination address stored in $packet
-    arguments
-        packet(1,1) DataPacket;
-    end  
+    ncs = GetNcsByHandle(handle);
 
-    % addresses start at 1 in Matlab!
-    dstAddr = packet.destinationAddress - 1;
+    % translate sampling interval (given in seconds) into pico-seconds
+    plantInterval = ConvertToPicoseconds(ncs.plantSamplingInterval);
 end
 

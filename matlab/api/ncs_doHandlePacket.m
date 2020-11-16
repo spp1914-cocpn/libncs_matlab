@@ -30,13 +30,11 @@ function pktsOut = ncs_doHandlePacket(handle, timestamp, pktIn)
     %    You should have received a copy of the GNU General Public License
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
     
-    GetNcsByHandle(handle); % crashes if handle is invalid
-    assert(Checks.isPosScalar(timestamp) && mod(timestamp, 1) == 0, ...
-        'ncs_doHandlePacket:InvalidTimestamp', ...
-        '** <timestamp> expected to be positive integer **');
-    assert(Checks.isClass(pktIn, 'DataPacket'), ...
-        'ncs_doHandlePacket:InvalidPacket', ...
-        '** <pktIn> expected to be a single DataPacket **');    
+    arguments
+        handle {GetNcsByHandle(handle)} % crashes if handle is invalid
+        timestamp(1,1) double {mustBePositive, mustBeInteger}
+        pktIn(1,1) DataPacket
+    end
 
     DataPacketBuffer.getInstance().addPacket(handle, pktIn);
     % so far, do not return any ACKs or other packets

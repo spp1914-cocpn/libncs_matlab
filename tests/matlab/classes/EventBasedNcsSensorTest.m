@@ -7,7 +7,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2018  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2018-2020  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -72,13 +72,18 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
         
         %% testSetMeasurementDelta
         function testSetMeasurementDelta(this)
-            expectedErrId = 'EventBasedNcsSensor:SetMeasurementDelta:InvalidDelta';
+            if verLessThan('matlab', '9.8')
+                % Matlab R2018 or R2019
+                expectedErrId = 'MATLAB:UnableToConvert';
+            else
+                expectedErrId = 'MATLAB:validation:UnableToConvert';
+            end
             
             invalidMeasDelta = this; % not a scalar
             this.verifyError(@() this.setMeasDelta(invalidMeasDelta), expectedErrId);
             
             invalidMeasDelta = -eps; % not nonnegative
-            this.verifyError(@() this.setMeasDelta(invalidMeasDelta), expectedErrId);
+            this.verifyError(@() this.setMeasDelta(invalidMeasDelta), 'MATLAB:validators:mustBeNonnegative');
             
             % now a succesfult try
             newMeasDelta = 1000;

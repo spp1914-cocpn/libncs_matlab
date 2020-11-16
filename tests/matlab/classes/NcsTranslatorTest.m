@@ -7,7 +7,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2017-2019  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2017-2020  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -50,7 +50,12 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
     methods (Test)
         %% testNcsTranslatorInvalidQualityRateCurve
         function testNcsTranslatorInvalidQualityRateCurve(this)
-            expectedErrId = 'NcsTranslator:InvalidQualityRateCurve';
+            if verLessThan('matlab', '9.8')
+                % Matlab R2018 or R2019
+                expectedErrId = 'MATLAB:UnableToConvert';
+            else
+                expectedErrId = 'MATLAB:validation:UnableToConvert';
+            end
             
             invalidQocCurve = this; % wrong type
             this.verifyError(@() NcsTranslator(invalidQocCurve, this.controlErrorQocCurve, this.maxDataRate), expectedErrId);           
@@ -58,27 +63,38 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
         
         %% testNcsTranslatorInvalidControlErrorQualityCurve
         function testNcsTranslatorInvalidControlErrorQualityCurve(this)
-            expectedErrId = 'NcsTranslator:InvalidControlErrorQualityCurve';
+            if verLessThan('matlab', '9.8')
+                % Matlab R2018 or R2019
+                expectedErrId = 'MATLAB:UnableToConvert';
+            else
+                expectedErrId = 'MATLAB:validation:UnableToConvert';
+            end
             
             invalidControlErrorQocCurve = this; % wrong type
             this.verifyError(@() NcsTranslator(this.qocRateCurve, invalidControlErrorQocCurve, this.maxDataRate), expectedErrId);
         end
         
         %% testNcsTranslatorInvalidMaxPossibleRate
-        function testNcsTranslatorInvalidMaxPossibleRate(this)
-            expectedErrId = 'NcsTranslator:InvalidMaxPossibleRate';
+        function testNcsTranslatorInvalidMaxPossibleRate(this)            
+            if verLessThan('matlab', '9.8')
+                % Matlab R2018 or R2019
+                expectedErrIds = {'MATLAB:UnableToConvert', 'MATLAB:type:InvalidInputSize'};
+            else
+                expectedErrIds = {'MATLAB:validation:UnableToConvert', 'MATLAB:validation:IncompatibleSize'};
+            end
+            
             
             invalidRate = this; % wrong type
-            this.verifyError(@() NcsTranslator(this.qocRateCurve, this.controlErrorQocCurve, invalidRate), expectedErrId);
+            this.verifyError(@() NcsTranslator(this.qocRateCurve, this.controlErrorQocCurve, invalidRate), expectedErrIds{1});
             
             invalidRate = [1 2]; % not a scalar
-            this.verifyError(@() NcsTranslator(this.qocRateCurve, this.controlErrorQocCurve, invalidRate), expectedErrId);
+            this.verifyError(@() NcsTranslator(this.qocRateCurve, this.controlErrorQocCurve, invalidRate), expectedErrIds{2});
             
             invalidRate = 0; % scalar, but not positive
-            this.verifyError(@() NcsTranslator(this.qocRateCurve, this.controlErrorQocCurve, invalidRate), expectedErrId);
+            this.verifyError(@() NcsTranslator(this.qocRateCurve, this.controlErrorQocCurve, invalidRate), 'MATLAB:validators:mustBePositive');
             
             invalidRate = inf; % scalar, but not finite
-            this.verifyError(@() NcsTranslator(this.qocRateCurve, this.controlErrorQocCurve, invalidRate), expectedErrId);            
+            this.verifyError(@() NcsTranslator(this.qocRateCurve, this.controlErrorQocCurve, invalidRate), 'MATLAB:validators:mustBeFinite');            
         end
 %%
 %%
@@ -103,7 +119,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             this.verifyEqual(actualRateChange, expectedRateChange, 'AbsTol', 1e-10);
         end
 %%
-%%
+%%        
         %% testGetQocForDataRate
         function testGetQocForDataRate(this)
             actualQoc = 0.5;
@@ -120,7 +136,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             this.verifyEqual(actualQoc, expectedQoc);
         end
 %%
-%%
+%%        
         %% testTranslateControlError
         function testTranslateControlError(this)
             controlError = 2.5;

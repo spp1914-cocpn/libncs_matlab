@@ -10,7 +10,7 @@ LIBNAME = libncs_matlab
 API_FILES = $(wildcard $(API_DIR)/*.m) $(wildcard $(API_DIR)/*/*.m)
 SRC_FILES = $(shell find $(SRC_DIR)/ -name '*.m')
 # the following variable contains files to be added to the deployable archive using mcc -a
-MCC_ADD_FILES = $(MLIB_DIR)/Classes $(MEX_BUILD_DIR) $(MLIB_DIR)/external/yalmip $(wildcard $(MLIB_DIR)/external/sdpt3/*.m) $(wildcard $(MLIB_DIR)/external/sdpt3/*/*.m)
+MCC_ADD_FILES = $(MLIB_DIR)/Classes $(MEX_BUILD_DIR) $(MLIB_DIR)/external/yalmip $(MEX_BUILD_DIR) $(MLIB_DIR)/external/NonlinearEstimationToolbox $(wildcard $(MLIB_DIR)/external/sdpt3/*.m) $(wildcard $(MLIB_DIR)/external/sdpt3/*/*.m)
 # the following variable contains folders to be included for the compilation using mcc -I
 MCC_INC_DIRS = $(SRC_DIR)/classes $(SRC_DIR)/functions $(MLIB_DIR)/Classes $(MLIB_DIR)/external
 MCC_ADD_FLAGS = $(addprefix -I , $(MCC_INC_DIRS)) $(addprefix -a , $(MCC_ADD_FILES))
@@ -49,8 +49,8 @@ MEX_OUT_FILES := $(addprefix $(MEX_BUILD_DIR)/, $(notdir $(MEX_SRC:.c=.mexa64)))
 
 # own mex files (C++)
 #armadillo requires blas/openblas and lapack (and not mwlapack)
-MEX_ADD_SRC_DIR = $(MLIB_DIR)/Classes/Controllers/mex
-MEX_ADD_SRC := $(wildcard $(MEX_ADD_SRC_DIR)/*/*.cpp)
+MEX_ADD_SRC_DIR = $(MLIB_DIR)/Classes/
+MEX_ADD_SRC :=  $(shell find $(MEX_ADD_SRC_DIR) -wholename '*/mex/*/*.cpp')
 MEX_ADD_OUT_FILES := $(addprefix $(MEX_BUILD_DIR)/, $(notdir $(MEX_ADD_SRC:.cpp=.mexa64)))
 MEX_ADD_INC_DIRS = $(MLIB_DIR)/external/armadillo/include $(MLIB_DIR)/external/armadillo/mex_interface
 MEX_ADD_FLAGS = -DARMA_BLAS_LONG_LONG -DARMA_DONT_USE_WRAPPER -DARMA_NO_DEBUG -lmwlapack $(addprefix -I, $(MEX_ADD_INC_DIRS))

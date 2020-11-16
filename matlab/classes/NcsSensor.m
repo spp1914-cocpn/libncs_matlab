@@ -6,7 +6,7 @@ classdef NcsSensor < handle
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2018  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2018-2020 Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -28,12 +28,12 @@ classdef NcsSensor < handle
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
     
     properties (SetAccess = immutable, GetAccess = protected)
-        sensor@LinearMeasurementModel;
+        sensor(1,1) LinearMeasurementModel;
     end
     
     properties(SetAccess = protected, GetAccess = public)
         % indicate whether sensor works event-based
-        isEventBased@logical = false;
+        isEventBased(1,1) logical = false;
     end
     
     methods (Access = public)

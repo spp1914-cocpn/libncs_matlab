@@ -26,9 +26,9 @@ function payload = ncs_pktGetPayload(packet)
     %    You should have received a copy of the GNU General Public License
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
     
-    assert(Checks.isClass(packet, 'DataPacket'), ...
-        'ncs_pktGetPayload:InvalidPacket', ...
-        '** <packet> expected to be a single DataPacket **'); 
+    arguments
+        packet(1,1) DataPacket;
+    end 
 
     % valid data packet
     % get the payload (and the timestamp + ack) and serialize it

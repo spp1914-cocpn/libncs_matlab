@@ -24,9 +24,9 @@ function timestamp = ncs_pktGetTimeStamp(packet)
     %    You should have received a copy of the GNU General Public License
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
     
-    assert(Checks.isClass(packet, 'DataPacket'), ...
-        'ncs_pktGetTimeStamp:InvalidPacket', ...
-        '** <packet> expected to be a single DataPacket **'); 
+    arguments
+        packet(1,1) DataPacket;
+    end 
     
     timestamp = packet.timeStamp;
 end

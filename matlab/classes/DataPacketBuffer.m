@@ -9,7 +9,7 @@ classdef DataPacketBuffer < handle
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2017-2018  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2017-2020  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -56,9 +56,11 @@ classdef DataPacketBuffer < handle
             %   >> handle (Key into ComponentMap)
             %      A handle (key into ComponentMap) which uniquely identifies a NetworkedControlSystem instance.
             %
-            assert(Checks.isPosScalar(ncsHandle) && mod(ncsHandle, 1) == 0, ...
-                'DataPacketBuffer:Clear:InvalidKey',  ...
-                '** Map key <key> (handle) must be a positive integer **');
+            arguments
+                this
+                ncsHandle(1,1) {mustBeNumeric, mustBePositive, mustBeInteger}
+            end
+            
             this.buffer(ncsHandle) = [];
         end
         
@@ -101,13 +103,12 @@ classdef DataPacketBuffer < handle
             %      The DataPacket sent to the NCS with the specified
             %      handle.
             %
-            assert(Checks.isClass(packet, 'DataPacket'), ...
-                'DataPacketBuffer:AddPacket:InvalidDataPacket',  ...
-                '** Expected type of <packet> is DataPacket, but true type is %s **', class(packet));
-            assert(Checks.isPosScalar(ncsHandle) && mod(ncsHandle, 1) == 0, ...
-                'DataPacketBuffer:AddPacket:InvalidKey',  ...
-                '** Map key <key> (handle) must be a positive integer **');
-            
+            arguments
+                this
+                ncsHandle(1,1) {mustBeNumeric, mustBePositive, mustBeInteger}
+                packet(1,1) DataPacket
+            end
+     
             if ~isKey(this.buffer, ncsHandle)
                 this.buffer(ncsHandle) = packet;
             else

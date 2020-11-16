@@ -19,9 +19,9 @@ function ncs_seedRng(seed)
     %    You should have received a copy of the GNU General Public License
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
     
-    assert(Checks.isNonNegativeScalar(seed) && mod(seed, 1) == 0, ...
-        'ncs_seedRng:InvalidSeed', ...
-        '** <seed> expected to be a nonnegative integer **'); 
+    arguments
+        seed(1,1) {mustBeNumeric, mustBeNonnegative, mustBeInteger}
+    end
     
     rng(seed);
 end

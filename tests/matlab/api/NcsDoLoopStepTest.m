@@ -7,7 +7,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2018-2019  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2018-2020  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -33,6 +33,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
         ncsHandle;
         
         tickerInterval;
+        plantTickerInterval;
         
         componentMap;
         packetBuffer;
@@ -44,6 +45,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
         caPacket;
         
         maxLoopSteps;
+        maxPlantSteps;
         maxMeasDelay;
         controlSeqLength;
         
@@ -81,10 +83,12 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
         %% init
         function init(this)
             this.tickerInterval = 1; % 1s
+            this.plantTickerInterval = 1; % 1s 
             this.componentMap = ComponentMap.getInstance();
             this.packetBuffer = DataPacketBuffer.getInstance();
             
             this.maxLoopSteps = 10;
+            this.maxPlantSteps = 10;
             this.maxMeasDelay = 2;
             this.controlSeqLength = 2;
             this.dimX = 3;
@@ -118,7 +122,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             this.sensor.setNoise(Gaussian(0, this.V));
                        
             this.controller = NominalPredictiveController(this.A, this.B, this.Q, this.R, this.controlSeqLength);
-            this.filter = DelayedKF(this.maxMeasDelay);
+            this.filter = DelayedKF(this.maxMeasDelay, eye(3));
             this.filter.setStateMeanAndCov(this.zeroPlantState, 0.5 * eye (this.dimX));
                         
             this.ncs = NetworkedControlSystem(NcsControllerWithFilter(this.controller, this.filter, ...
@@ -126,21 +130,18 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
                     this.controlSeqLength + 1, this.maxMeasDelay, [1/3 1/3 1/3]), ...
                     this.sensor, zeros(this.dimU, 1), [1/4 1/4 1/4 1/4]'), ...
                 NcsPlant(LinearPlant(this.A, this.B, this.W), ...
-                    BufferingActuator(this.controlSeqLength, this.maxMeasDelay, zeros(this.dimU, 1))), ...
-                NcsSensor(this.sensor), 'NCS', this.tickerInterval, NetworkType.TcpLike);
+                    BufferingActuator(this.controlSeqLength, zeros(this.dimU, 1))), ...
+                NcsSensor(this.sensor), 'NCS', this.tickerInterval, this.plantTickerInterval, NetworkType.TcpLike);
             this.ncs.initPlant(this.zeroPlantState);
             
-            this.ncs.initStatisticsRecording(this.maxLoopSteps);
+            maxSimTime = ConvertToPicoseconds(this.maxPlantSteps * this.plantTickerInterval);
+            this.ncs.initStatisticsRecording(maxSimTime);
             
             % setup the translator
             translator = NcsTranslator(cfit(fittype('a/x'), 1), cfit(fittype('a/x'), 10), 1/ this.tickerInterval);
             this.ncs.attachTranslator(translator);
             
-            this.ncsHandle = this.componentMap.addComponent(this.ncs);
-            % also, receive the packets
-            this.packetBuffer.addPacket(this.ncsHandle, this.scPacket);
-            this.packetBuffer.addPacket(this.ncsHandle, this.caPacket);
-            
+            this.ncsHandle = this.componentMap.addComponent(this.ncs);            
             this.addTeardown(@tearDown, this);
         end
     end
@@ -229,6 +230,19 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
         
         %% test
         function test(this)
+            for k=1:this.timestamp
+                % ensure that no packets are yet buffered for the NCS
+                this.assertEmpty(this.packetBuffer.getDataPackets(this.ncsHandle));                
+                timestep = k * 1e12; % in pico-seconds
+                ncs_doPlantStep(this.ncsHandle, timestep);
+                ncs_doLoopStep(this.ncsHandle, timestep);
+            end
+            
+            timestep = (this.timestamp + 1) * 1e12; % in pico-seconds
+            ncs_doPlantStep(this.ncsHandle, timestep);            
+            % also, receive the packets
+            this.packetBuffer.addPacket(this.ncsHandle, this.scPacket);
+            this.packetBuffer.addPacket(this.ncsHandle, this.caPacket);
             % ensure that there are two packets buffered for the NCS
             this.assertNumElements(this.packetBuffer.getDataPackets(this.ncsHandle), 2);
             
@@ -237,7 +251,6 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             import matlab.unittest.constraints.IsLessThanOrEqualTo
             import matlab.unittest.constraints.IsOfClass
             
-            timestep = (this.timestamp + 1) * 1e12; % in pico-seconds
             [pktsOut, qocOut, stats] = ncs_doLoopStep(this.ncsHandle, timestep);
             
             % check that qoc is nonnegative scalar
@@ -254,12 +267,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
                         
             this.verifyTrue(isfield(stats, 'actual_stagecosts'));
             this.verifyThat(stats.actual_stagecosts, IsScalar);
-            this.verifyThat(stats.actual_stagecosts, IsGreaterThanOrEqualTo(0));
-            
-            this.verifyTrue(isfield(stats, 'plant_state_admissible'));
-            this.verifyThat(stats.plant_state_admissible, IsScalar);
-            this.verifyThat(stats.plant_state_admissible, IsOfClass('logical'));
-            this.verifyTrue(stats.plant_state_admissible);
+            this.verifyThat(stats.actual_stagecosts, IsGreaterThanOrEqualTo(0));            
             
             % one sc packet was received with delay 1
             this.verifyTrue(isfield(stats, 'sc_delays'));
@@ -277,17 +285,14 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             
             this.verifyTrue(isfield(stats, 'sc_sent'));
             this.verifyThat(stats.sc_sent, IsScalar);
-            this.verifyThat(stats.plant_state_admissible, IsOfClass('logical'));
             this.verifyTrue(stats.sc_sent);
             
             this.verifyTrue(isfield(stats, 'ca_sent'));
             this.verifyThat(stats.ca_sent, IsScalar);
-            this.verifyThat(stats.plant_state_admissible, IsOfClass('logical'));
             this.verifyTrue(stats.ca_sent);
             
             this.verifyTrue(isfield(stats, 'ac_sent'));
             this.verifyThat(stats.ac_sent, IsScalar);
-            this.verifyThat(stats.plant_state_admissible, IsOfClass('logical'));
             this.verifyFalse(stats.ac_sent);
             
             % we expect a cell array of data packets, column-vector like

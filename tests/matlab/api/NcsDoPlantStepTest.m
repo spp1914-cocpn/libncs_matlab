@@ -1,7 +1,7 @@
 classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             'libncs_matlab/matlab', 'IncludingSubfolders', true)}) ...
-        NcsFinalizeTest < matlab.unittest.TestCase
-    % Test cases for the api function ncs_finalize.
+        NcsDoPlantStepTest < matlab.unittest.TestCase
+    % Test cases for the api function ncs_doPlantStep.
     
     % >> This function/class is part of CoCPN-Sim
     %
@@ -27,7 +27,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
     %
     %    You should have received a copy of the GNU General Public License
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
-    
+
     properties (Access = private)
         ncs;
         ncsHandle;
@@ -37,6 +37,8 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
         
         componentMap;
         
+        timestamp;
+                
         maxLoopSteps;
         maxPlantSteps;
         maxMeasDelay;
@@ -74,17 +76,18 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
         %% init
         function init(this)
             this.tickerInterval = 1; % 1s
-            this.plantTickerInterval = 1;
+            this.plantTickerInterval = 1; % 1s 
             this.componentMap = ComponentMap.getInstance();
+            this.timestamp = 2;
             
-            this.maxLoopSteps = 1;
-            this.maxPlantSteps = 1;
+            this.maxLoopSteps = 10;
+            this.maxPlantSteps = 10;
             this.maxMeasDelay = 2;
             this.controlSeqLength = 2;
             this.dimX = 3;
             this.dimU = 2;
             this.dimY = 1;
-            
+                        
             this.A = 0.75 * eye(this.dimX);
             this.B = ones(this.dimX, this.dimU);
             this.C = [1 2 3];
@@ -99,90 +102,62 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
                        
             this.controller = NominalPredictiveController(this.A, this.B, this.Q, this.R, this.controlSeqLength);
             this.filter = DelayedKF(this.maxMeasDelay, eye(3));
-            this.filter.setStateMeanAndCov(this.zeroPlantState, 0.5 * eye (this.dimX));            
-            
-            ncsPlant = NcsPlant(LinearPlant(this.A, this.B, this.W), ...
-                BufferingActuator(this.controlSeqLength, zeros(this.dimU, 1)));
-            ncsController = NcsControllerWithFilter(this.controller, this.filter, ...
-                 DelayedKFSystemModel(this.A, this.B, Gaussian(zeros(this.dimX, 1), this.W), ...
-                this.controlSeqLength + 1, this.maxMeasDelay, [1/3 1/3 1/3]), ...
-                this.sensor, zeros(this.dimU, 1), [1/4 1/4 1/4 1/4 1/4]);
-            ncsSensor = NcsSensor(this.sensor);
-            
-            this.ncs = NetworkedControlSystem(ncsController, ncsPlant, ncsSensor, ...
-                'NCS', this.tickerInterval, this.plantTickerInterval, NetworkType.TcpLike);
+            this.filter.setStateMeanAndCov(this.zeroPlantState, 0.5 * eye (this.dimX));
+                        
+            this.ncs = NetworkedControlSystem(NcsControllerWithFilter(this.controller, this.filter, ...
+                    DelayedKFSystemModel(this.A, this.B, Gaussian(zeros(this.dimX, 1), this.W), ...
+                    this.controlSeqLength + 1, this.maxMeasDelay, [1/3 1/3 1/3]), ...
+                    this.sensor, zeros(this.dimU, 1), [1/4 1/4 1/4 1/4]'), ...
+                NcsPlant(this.plant, BufferingActuator(this.controlSeqLength, zeros(this.dimU, 1))), ...
+                NcsSensor(this.sensor), 'NCS', this.tickerInterval, this.plantTickerInterval, NetworkType.TcpLike);
             this.ncs.initPlant(this.zeroPlantState);
             
             maxSimTime = ConvertToPicoseconds(this.maxPlantSteps * this.plantTickerInterval);
             this.ncs.initStatisticsRecording(maxSimTime);
-            % setup the translator
-            qocRateCurve = cfit(fittype('a/x'), 1);
-            controlErrorQocCurve = cfit(fittype('a*x^3'), 1.5);            
-            this.ncs.attachTranslator(NcsTranslator(qocRateCurve, controlErrorQocCurve, 1 / this.tickerInterval));            
             
-            this.ncsHandle = this.componentMap.addComponent(this.ncs);
-            
+            this.ncsHandle = this.componentMap.addComponent(this.ncs);            
             this.addTeardown(@tearDown, this);
         end
     end
     
     methods (Test)
-        %% testInvalidHandle
+       %% testInvalidHandle
         function testInvalidHandle(this)
             expectedErrId = 'ComponentMap:InvalidComponentType';
             
             invalidHandle = this.componentMap.addComponent(this); % invalid type
-            this.verifyError(@() ncs_finalize(invalidHandle), expectedErrId);
+            this.verifyError(@() ncs_doPlantStep(invalidHandle, this.timestamp), expectedErrId);
             
             expectedErrId = 'ComponentMap:InvalidIndex';
             
             invalidHandle = this.ncsHandle + 2; % not a valid index
-            this.verifyError(@() ncs_finalize(invalidHandle), expectedErrId);
+            this.verifyError(@() ncs_doPlantStep(invalidHandle, this.timestamp), expectedErrId);
         end
-        
+    
         %% test
         function test(this)
-            import matlab.unittest.constraints.IsScalar
-            this.assertTrue(this.componentMap.containsComponent(this.ncs));
-            
-            % perform a control cycle
-            simTime = this.maxLoopSteps * 1e12; % in pico-seconds
-            ncs_doPlantStep(this.ncsHandle, simTime);
-            ncs_doLoopStep(this.ncsHandle, simTime);
-            
-            [costs, controllerStats, plantStats] = ncs_finalize(this.ncsHandle);
-            
-            % check if stats are as indicated
-            this.verifyTrue(isstruct(controllerStats));
-            this.verifyTrue(isstruct(plantStats));
-            
-            this.verifyTrue(isfield(controllerStats, 'numUsedMeasurements'));
-            this.verifySize(controllerStats.numUsedMeasurements, [1 this.maxLoopSteps]);
-            this.verifyGreaterThanOrEqual(controllerStats.numUsedMeasurements, 0);
-             
-            this.verifyTrue(isfield(controllerStats, 'numDiscardedMeasurements'));
-            this.verifySize(controllerStats.numDiscardedMeasurements, [1 this.maxLoopSteps]);
-            this.verifyGreaterThanOrEqual(controllerStats.numDiscardedMeasurements, 0);
+            rng(42);
+            timestep = (this.timestamp + 1) * 1e12; % in pico-seconds
+            plantStateAdmissible = ncs_doPlantStep(this.ncsHandle, uint64(timestep));            
                         
-            this.verifyTrue(isfield(controllerStats, 'controllerStates'));
-            this.verifySize(controllerStats.controllerStates, [this.dimX this.maxLoopSteps + 1]);
+            import matlab.unittest.constraints.IsScalar
+            import matlab.unittest.constraints.IsOfClass                        
             
-            this.verifyTrue(isfield(controllerStats, 'numDiscardedControlSequences'));
-            this.verifySize(controllerStats.numDiscardedControlSequences, [1 this.maxLoopSteps]);
-            this.verifyGreaterThanOrEqual(controllerStats.numDiscardedControlSequences, 0);
+            this.verifyThat(plantStateAdmissible, IsScalar);
+            this.verifyThat(plantStateAdmissible, IsOfClass(?logical));
+            this.verifyTrue(plantStateAdmissible);
             
-            this.verifyTrue(isfield(plantStats, 'appliedInputs'));
-            this.verifySize(plantStats.appliedInputs, [this.dimU this.maxPlantSteps]);
+            % now set some constraints, so that the plant state becomes invalid
+            this.plant.setStateConstraints([-inf -inf -inf], [-1000 -1000 -1000]);
+            this.assertEqual(this.plant.stateConstraints(:), [-inf; -inf; -inf; -1000; -1000; -1000]);
             
-            this.verifyTrue(isfield(plantStats, 'trueStates'));
-            this.verifySize(plantStats.trueStates, [this.dimX this.maxPlantSteps + 1]);
+            timestep = (this.timestamp + 2) * 1e12; % in pico-seconds            
+            plantStateAdmissible = ncs_doPlantStep(this.ncsHandle, uint64(timestep));
             
-            % now check the returned value of the cost function
-            this.verifyThat(costs, IsScalar);
-            this.verifyGreaterThanOrEqual(costs, 0);
-            
-            this.verifyFalse(this.componentMap.containsComponent(this.ncs));
-         end
+            this.verifyThat(plantStateAdmissible, IsScalar);
+            this.verifyThat(plantStateAdmissible, IsOfClass(?logical));
+            this.verifyFalse(plantStateAdmissible);
+        end
     end
 end
 

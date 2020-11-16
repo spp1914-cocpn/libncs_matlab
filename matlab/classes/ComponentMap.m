@@ -9,7 +9,7 @@ classdef (Sealed) ComponentMap < handle
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2017-2018  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2017-2020  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -67,10 +67,10 @@ classdef (Sealed) ComponentMap < handle
             %   << index (Nonnegative integer)
             %      The index which can be used to retrieve the component
             %      from the map.
-            
-            assert(Checks.isClass(component, 'handle'), ...
-                'ComponentMap:ComponentNotAHandle', ...
-                '** Cannot add component for it is not a handle **');
+            arguments
+                this
+                component(1,1) handle
+            end
       
             assert(~this.containsComponent(component), ...
                 'ComponentMap:ComponentAlreadyPresent', ...

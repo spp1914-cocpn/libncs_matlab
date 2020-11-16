@@ -1,4 +1,4 @@
-function id = ncs_pktGetId(packet)
+function id = ncs_pktGetId(packet)    
     % Returns the identifier of the given packet. 
     % The identifier is not guaranteed to be unique.
     %
@@ -23,11 +23,10 @@ function id = ncs_pktGetId(packet)
     %    You should have received a copy of the GNU General Public License
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
     
-	% identifier stored in $packet
-    assert(Checks.isClass(packet, 'DataPacket'), ...
-        'ncs_pktGetId:InvalidPacket', ...
-        '** <packet> expected to be a single DataPacket **'); 
-
+    arguments
+        packet(1,1) DataPacket;
+    end   
+	
     id = packet.id;
 end
 
