@@ -485,11 +485,7 @@ function controller = initController(config, horizonLength)
                 config.controlSequenceLength);
         case 'ExpectedInputPredictiveController'
             controller = ExpectedInputPredictiveController(config.A, config.B, config.Q, config.R, ...
-                config.controlSequenceLength, config.caDelayProbs);
-        case 'ScenarioBasedPredictiveController'
-              controller = ScenarioBasedPredictiveController(config.plant, config.Q, config.R, config.controlSequenceLength, ...
-                  config.caDelayProbs);
-              controller.changeHorizonLength(config.mpcHorizon);
+                config.controlSequenceLength, config.caDelayProbs);        
         case 'PolePlacementPredictiveController'
             assert(isfield(config, 'polesCont'), ...
                 'ncs_initialize:InitController:PolePlacementPredictiveController', ...
@@ -599,10 +595,7 @@ function controller = initController(config, horizonLength)
                 config.maxMeasDelay, actualW, config.V, controllerHorizonLength, x0, x0Cov, true);
         case 'MSSController'
             controllerDelta = 0.1; % to be promoted to configuration parameter
-            %controller = MSSController(config.A, config.B, config.controlSequenceLength, controllerDelta);
-            [x0, ~] = config.initialEstimate.getMeanAndCov();
-            controller = DynamicMSSController(config.A, config.B, config.C, config.controlSequenceLength, ...
-                controllerDelta, config.maxMeasDelay, x0);
+            controller = MSSController(config.A, config.B, config.controlSequenceLength, controllerDelta);            
         otherwise
             error('ncs_initialize:InitController:UnsupportedControllerClass', ...
                 '** Controller class with name ''%s'' unsupported or unknown **', config.controllerClassName);

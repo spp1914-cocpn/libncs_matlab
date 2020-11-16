@@ -720,8 +720,7 @@ classdef NcsController < handle
         %% constructDoStepFun
         function fun = constructDoStepFun(this)
             switch metaclass(this.controller)
-                case {?IMMBasedRecedingHorizonController}
-                    disp('hit');
+                case {?IMMBasedRecedingHorizonController}       
                     fun = @computeGetState;
                 otherwise
                     fun = @getStateCompute;
