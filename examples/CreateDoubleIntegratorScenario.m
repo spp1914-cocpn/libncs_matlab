@@ -14,7 +14,7 @@ function config = CreateDoubleIntegratorScenario()
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2018-2019  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2018-2020  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -84,8 +84,8 @@ function config = CreateDoubleIntegratorScenario()
     scDelayProbs = [];
     maxMeasDelay = max(0, numel(caDelayProbs) - 1); % last entry indicates loss
     
-    filterClass = ?DelayedModeIMMF;
-    controllerClass = ?InfiniteHorizonController;%?NominalPredictiveController;
+    filterClass = ?DelayedModeIMMF; % not needed with the given controller
+    controllerClass = ?IMMBasedRecedingHorizonController;
     
     Q_cont = [1560 0; 0 0]; % continuous-time weighting matrix for state
     R_cont = 1;  % continuous-time weighting matrix for input
@@ -106,6 +106,7 @@ function config = CreateDoubleIntegratorScenario()
         maxControlSequenceDelay, caDelayProbs, scDelayProbs, config);
     
     config.networkType = NetworkType.UdpLikeWithAcks;
+    config.plant = LinearPlant(config.A, config.B, config.W);
     
     initialPlantCov = 0.5 * eye(2); % taken from ACC 2013 paper by Jörg and Maxim
     initialEstimate = Gaussian(config.initialPlantState, initialPlantCov);
