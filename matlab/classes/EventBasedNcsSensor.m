@@ -11,12 +11,17 @@ classdef EventBasedNcsSensor < NcsSensor
     %   Event-Based Control and Signal Processing,
     %   Chapter 13 (Time-Periodic State Estimation with Event-Based Measurement Updates),
     %   CRC Press, Nov. 2015.
+    %
+    %   Markus Jung, Florian Rosenthal, and Martina Zitterbart,
+    %   CoCPN-Sim: An Integrated Simulation Environment for Cyber-Physical Systems,
+    %   Proceedings of the 2018 IEEE/ACM Third International Conference on Internet-of-Things Design and Implementation (IoTDI), 
+    %   Orlando, FL, USA, April 2018.
     
     % >> This function/class is part of CoCPN-Sim
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2018-2020  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2018-2021  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)

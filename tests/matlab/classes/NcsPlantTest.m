@@ -7,7 +7,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2018-2020  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2018-2021  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -77,43 +77,41 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             
             this.verifyEqual(ncsPlant.dimState, this.dimX);
             this.verifyEqual(ncsPlant.dimInput, this.dimU);
-            this.verifyEmpty(ncsPlant.getStatistics(1)); % the parameter passed here is irrelevant
+            this.verifyEmpty(ncsPlant.getStatistics(1)); % the parameter here is irrelavant, since initStatistics() has not been called
         end
         
         %% testInitStatisticsRecordingNoInit
         function testInitStatisticsRecordingNoInit(this)
             expectedErrId = 'NcsPlant:InitStatisticsRecording';
             
-            maxActuatorSteps = 100;
-            maxPlantSteps = maxActuatorSteps * 10;
-            this.verifyError(@()  this.ncsPlantUnderTest.initStatisticsRecording(maxPlantSteps, maxActuatorSteps), ...
+            maxPlantSteps = 1000;
+            % no initial plant state has been set
+            this.verifyError(@()  this.ncsPlantUnderTest.initStatisticsRecording(maxPlantSteps), ...
                 expectedErrId);
         end
         
         %% testInitStatisticsRecording
-        function testInitStatisticsRecording(this)
-            maxActuatorSteps = 100;
-            maxPlantSteps = maxActuatorSteps * 10;
+        function testInitStatisticsRecording(this)            
             plantState = ones(this.dimX, 1);
             
-            this.ncsPlantUnderTest.init(plantState);            
-                        
-            this.ncsPlantUnderTest.initStatisticsRecording(maxPlantSteps, maxActuatorSteps);
+            maxPlantSteps = 1000;            
+            this.ncsPlantUnderTest.init(plantState, maxPlantSteps);            
+            this.ncsPlantUnderTest.initStatisticsRecording(maxPlantSteps);
             
             % check the side effect, i.e., the proper creation and initialization of the structure to
-            % store the data            
-            actualStatistics = this.ncsPlantUnderTest.getStatistics(maxActuatorSteps);
+            % store the data, everything should be empty but one true state recorded            
+            actualStatistics = this.ncsPlantUnderTest.getStatistics(maxPlantSteps);
             this.verifyTrue(isfield(actualStatistics, 'trueStates'));
             this.verifyEqual(actualStatistics.trueStates, [plantState nan(this.dimX, maxPlantSteps)]);
                         
             this.verifyTrue(isfield(actualStatistics, 'appliedInputs'));
             this.verifyEqual(actualStatistics.appliedInputs, nan(this.dimU, maxPlantSteps));
-            
+                        
             this.verifyTrue(isfield(actualStatistics, 'trueModes'));
-            this.verifyEqual(actualStatistics.trueModes, nan(1, maxActuatorSteps));
+            this.verifyEmpty(actualStatistics.trueModes);
             
             this.verifyTrue(isfield(actualStatistics, 'numDiscardedControlSequences'));
-            this.verifyEqual(actualStatistics.numDiscardedControlSequences, nan(1, maxActuatorSteps));
+            this.verifyEmpty(actualStatistics.numDiscardedControlSequences);
         end
         
         %% testPlantStepNoInit
@@ -121,26 +119,30 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             expectedErrId = 'NcsPlant:PlantStep';
             
             plantTimestep = 1;
-            this.verifyError(@() this.ncsPlantUnderTest.plantStep(plantTimestep), ...
+            simTimeSec = 1;
+            this.verifyError(@() this.ncsPlantUnderTest.plantStep(plantTimestep, simTimeSec), ...
                 expectedErrId);
         end
         
         %% testPlantStep
         function testPlantStep(this)
-            plantState = [2 3 4]';
-            maxActuatorSteps = 100;
-            maxPlantSteps = maxActuatorSteps * 10;
+            maxPlantSteps = 1000;
+            plantState = [2 3 4]';            
             
+            % draw a noise sample
             rng(42);
-            expectedPlantState = this.A * plantState + mvnrnd(zeros(3, 1), this.W)';
-            
-            this.ncsPlantUnderTest.init(plantState);                       
-            this.ncsPlantUnderTest.initStatisticsRecording(maxPlantSteps, maxActuatorSteps);            
-            this.assertNotEmpty(this.ncsPlantUnderTest.getStatistics(maxActuatorSteps));
+            noiseSample = this.sysModel.noise.drawRndSamples(1);
+            expectedPlantState = this.A * plantState + noiseSample;
             
             rng(42); % should result in the same noise sample for the plant
+            % plant noise samples are "precomputed" in init()
+            this.ncsPlantUnderTest.init(plantState, maxPlantSteps);                       
+            this.ncsPlantUnderTest.initStatisticsRecording(maxPlantSteps);            
+            this.assertNotEmpty(this.ncsPlantUnderTest.getStatistics(maxPlantSteps));
+                        
             plantTimestep = 1;
-            newPlantState = this.ncsPlantUnderTest.plantStep(plantTimestep);
+            simTimeSec = 1; % for simplicity, 1 time step = 1 second
+            newPlantState = this.ncsPlantUnderTest.plantStep(plantTimestep, simTimeSec);
             
             [storedPlantState, actualInput] = this.ncsPlantUnderTest.getPlantStatsForTimestep(plantTimestep);            
             
@@ -151,17 +153,17 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
         
         %% testActuatorStepNoPackets
         function testActuatorStepNoPackets(this)
-            plantState = [2 3 4]';
-            maxActuatorSteps = 100;
-            maxPlantSteps = maxActuatorSteps * 10; 
+            maxPlantSteps = 1000;
+            plantState = [2 3 4]';            
             caPackets = [];
             actuatorTimestep = 1;
+            simTimeSec = 1; % for simplicity, 1 time step = 1 second
             
-            this.ncsPlantUnderTest.init(plantState);                       
-            this.ncsPlantUnderTest.initStatisticsRecording(maxPlantSteps, maxActuatorSteps);            
-            this.assertNotEmpty(this.ncsPlantUnderTest.getStatistics(maxActuatorSteps));
+            this.ncsPlantUnderTest.init(plantState, maxPlantSteps);                       
+            this.ncsPlantUnderTest.initStatisticsRecording(maxPlantSteps);            
+            this.assertNotEmpty(this.ncsPlantUnderTest.getStatistics(maxPlantSteps));
             
-            [plantMode, controllerAcks] = this.ncsPlantUnderTest.actuatorStep(actuatorTimestep, caPackets); 
+            [plantMode, controllerAcks] = this.ncsPlantUnderTest.actuatorStep(actuatorTimestep, simTimeSec, caPackets); 
             [numDiscardedSeq, storedPlantMode] = this.ncsPlantUnderTest.getActuatorStatsForTimestep(actuatorTimestep);
                         
             this.verifyEmpty(controllerAcks);
@@ -172,28 +174,36 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
         
         %% testActuatorStep
         function testActuatorStep(this)
-            plantState = [2 3 4]';
-            maxActuatorSteps = 100;
-            maxPlantSteps = maxActuatorSteps;             
+            maxPlantSteps = 2;
+            plantState = [2 3 4]';          
             timestep = 1;
             actuatorTimestep = 2;
             plantTimestep = 2;
-            id= 42;
+            simTimeSec = 2; % for simplicity, 1 time step = 1 second
+            id = 42;
             
-            this.ncsPlantUnderTest.init(plantState);                       
-            this.ncsPlantUnderTest.initStatisticsRecording(maxPlantSteps, maxActuatorSteps);            
-            this.assertNotEmpty(this.ncsPlantUnderTest.getStatistics(maxActuatorSteps));
+            rng(42); % seed before drawing noise samples in init()
+            this.ncsPlantUnderTest.init(plantState, maxPlantSteps);                       
+            this.ncsPlantUnderTest.initStatisticsRecording(maxPlantSteps);
+            this.assertNotEmpty(this.ncsPlantUnderTest.getStatistics(maxPlantSteps));
+            
+            % perform a step to reach timestep 2            
+            this.ncsPlantUnderTest.actuatorStep(1, 1, []);
+            this.ncsPlantUnderTest.plantStep(1, 1);
+            % propagate the expected state
+            rng(42); % should result in the same two noise samples now
+            noiseSamples = this.sysModel.noise.drawRndSamples(2);
+            expectedPlantState = this.A * plantState + noiseSamples(:, 1);
             
             dataPacket = DataPacket(this.controlSequence, timestep, id);
             dataPacket.packetDelay = 1;
             dataPacket.sourceAddress = 2;
             dataPacket.destinationAddress = 1;
             expectedMode = dataPacket.packetDelay + 1;
-            expectedInput = this.controlSequence(:, expectedMode);
-            rng(42);
-            expectedPlantState = this.A * plantState + this.B * expectedInput + mvnrnd(zeros(3, 1), this.W)';
+            expectedInput = this.controlSequence(:, expectedMode);            
+            expectedPlantState = this.A * expectedPlantState + this.B * expectedInput + noiseSamples(:, 2);
             
-            [plantMode, controllerAcks] = this.ncsPlantUnderTest.actuatorStep(actuatorTimestep, dataPacket);            
+            [plantMode, controllerAcks] = this.ncsPlantUnderTest.actuatorStep(actuatorTimestep, simTimeSec, dataPacket);            
             [numDiscardedSeq, storedPlantMode] = this.ncsPlantUnderTest.getActuatorStatsForTimestep(actuatorTimestep);
                         
             this.verifyNotEmpty(controllerAcks);
@@ -202,31 +212,129 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             this.verifyEqual(plantMode, expectedMode);
             this.verifyEqual(storedPlantMode, expectedMode);
             
-            % now we also perform a plant step
-            rng(42); % should result in the same noise sample for the plant
-            newPlantState = this.ncsPlantUnderTest.plantStep(plantTimestep);
+            % now we also perform a plant step            
+            newPlantState = this.ncsPlantUnderTest.plantStep(plantTimestep, simTimeSec);
             
             [storedPlantState, actualInput] = this.ncsPlantUnderTest.getPlantStatsForTimestep(plantTimestep);
                         
             this.verifyEqual(actualInput, expectedInput);
-            this.verifyEqual(storedPlantState, newPlantState);
-            this.verifyEqual(newPlantState, expectedPlantState);
+            this.verifyEqual(storedPlantState, newPlantState, 'AbsTol', 1e-15);
+            this.verifyEqual(newPlantState, expectedPlantState, 'AbsTol', 1e-15);
         end
-              
-       
+%%
+%%
+        %% testGetInterpolatedPlantStateInvertedPendulum
+        function testGetInterpolatedPlantStateInvertedPendulum(this)
+            % we need a pendulum plant
+            ta = 1; % 1 second
+            pendulum = InvertedPendulum(1, 1, 1, 1, ta); % no noise            
+            ncsPlant = NcsPlant(pendulum, BufferingActuator(2, 0));           
+            
+            maxPlantSteps = 10;
+            plantState = [0 0 pi+0.001 0]'; % slightly away from equilibrium                       
+   
+            ncsPlant.init(plantState, maxPlantSteps);                       
+            ncsPlant.initStatisticsRecording(maxPlantSteps);            
+            this.assertNotEmpty(ncsPlant.getStatistics(maxPlantSteps));
+                        
+            plantTimestep = 1;
+            simTimeSec = 1; % for simplicity, 1 time step = 1 second
+            % zero input       
+            newPlantState = ncsPlant.plantStep(plantTimestep, simTimeSec);
+                        
+            zeroIntervalPortion = 0;
+            interpolatedState = ncsPlant.getInterpolatedPlantState(plantTimestep, zeroIntervalPortion);
+            
+            this.verifyEqual(interpolatedState, newPlantState);
+            
+            nonzeroPortion = 0.5;
+            interpolatedState = ncsPlant.getInterpolatedPlantState(plantTimestep, nonzeroPortion);
+            % compute the expected input using a copy of the system with ta= 0.5
+            pendCopy = InvertedPendulum(1, 1, 1, 1, ta * nonzeroPortion); % no noise
+            expectedInterpolatedState = pendCopy.simulate(newPlantState); % no noise, no input
+            
+            this.verifyEqual(interpolatedState, expectedInterpolatedState);
+            
+        end
+        
+        %% testGetInterpolatedPlantStateDoubleInvertedPendulum
+        function testGetInterpolatedPlantStateDoubleInvertedPendulum(this)
+            % we need a pendulum plant
+            ta = 1; % 1 second
+            pendulum = DoubleInvertedPendulum(1, 1, 1, 1, 1, 0.75, 0.5, 0.5, ta); % no noise            
+            ncsPlant = NcsPlant(pendulum, BufferingActuator(2, 0));           
+            
+            maxPlantSteps = 10;
+            plantState = [0 0 0.001 0 0 0]'; % upper pendulum slightly away from equilibrium                       
+   
+            ncsPlant.init(plantState, maxPlantSteps);                       
+            ncsPlant.initStatisticsRecording(maxPlantSteps);            
+            this.assertNotEmpty(ncsPlant.getStatistics(maxPlantSteps));
+                        
+            plantTimestep = 1;
+            simTimeSec = 1; % for simplicity, 1 time step = 1 second
+            % zero input       
+            newPlantState = ncsPlant.plantStep(plantTimestep, simTimeSec);
+                        
+            zeroIntervalPortion = 0;
+            interpolatedState = ncsPlant.getInterpolatedPlantState(plantTimestep, zeroIntervalPortion);
+            
+            this.verifyEqual(interpolatedState, newPlantState);
+            
+            nonzeroPortion = 0.5;
+            interpolatedState = ncsPlant.getInterpolatedPlantState(plantTimestep, nonzeroPortion);
+            % compute the expected input using a copy of the system with ta= 0.5
+            pendCopy = DoubleInvertedPendulum(1, 1, 1, 1, 1, 0.75, 0.5, 0.5, ta * nonzeroPortion); % no noise  
+            expectedInterpolatedState = pendCopy.simulate(newPlantState); % no noise, no input
+            
+            this.verifyEqual(interpolatedState, expectedInterpolatedState);
+            
+        end
+        
+        %% testGetInterpolatedPlantStateNoPendulum
+        function testGetInterpolatedPlantStateNoPendulum(this)            
+            maxPlantSteps = 10;
+            plantState = [2 3 4]';            
+            % plant noise samples are "precomputed" in init()
+            this.ncsPlantUnderTest.init(plantState, maxPlantSteps);                       
+            this.ncsPlantUnderTest.initStatisticsRecording(maxPlantSteps);            
+            this.assertNotEmpty(this.ncsPlantUnderTest.getStatistics(maxPlantSteps));
+                        
+            plantTimestep = 1;
+            simTimeSec = 1; % for simplicity, 1 time step = 1 second
+            newPlantState = this.ncsPlantUnderTest.plantStep(plantTimestep, simTimeSec);
+            
+            % always return last true state
+            intervalPortion = 1/3;
+            interpolatedState = this.ncsPlantUnderTest.getInterpolatedPlantState(plantTimestep, intervalPortion);
+            
+            this.verifyEqual(interpolatedState, newPlantState);
+            
+            % always return last true state
+            intervalPortion = 1/7;
+            interpolatedState = this.ncsPlantUnderTest.getInterpolatedPlantState(plantTimestep, intervalPortion);
+            
+            this.verifyEqual(interpolatedState, newPlantState);
+        end
+%%
+%%
         %% testChangeActuatorSequenceLength
         function testChangeActuatorSequenceLength(this)
-            plantState = [2 3 4]';
-            maxActuatorSteps = 100;
-            maxPlantSteps = maxActuatorSteps;             
+            maxPlantSteps = 1000;
+            plantState = [2 3 4]';                      
             timestep = 1;
             actuatorTimestep = 2;
+            simTimeSec = 2; % for simplicity, 1 time step = 1 second
             id= 42;
             newSeqLength = 2;
             
-            this.ncsPlantUnderTest.init(plantState);                       
-            this.ncsPlantUnderTest.initStatisticsRecording(maxPlantSteps, maxActuatorSteps);            
-            this.assertNotEmpty(this.ncsPlantUnderTest.getStatistics(maxActuatorSteps));
+            this.ncsPlantUnderTest.init(plantState, maxPlantSteps);                       
+            this.ncsPlantUnderTest.initStatisticsRecording(maxPlantSteps);            
+            this.assertNotEmpty(this.ncsPlantUnderTest.getStatistics(maxPlantSteps));
+            
+            % perform a step to reach timestep 2            
+            this.ncsPlantUnderTest.actuatorStep(timestep, timestep, []);
+            this.ncsPlantUnderTest.plantStep(timestep, timestep);
             
             dataPacket = DataPacket(this.controlSequence(:, 1:newSeqLength), timestep, id);
             dataPacket.packetDelay = 1;
@@ -236,7 +344,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             % now change the sequence length
             this.ncsPlantUnderTest.changeActuatorSequenceLength(newSeqLength);
             
-            [plantMode, controllerAcks] = this.ncsPlantUnderTest.actuatorStep(actuatorTimestep, dataPacket);            
+            [plantMode, controllerAcks] = this.ncsPlantUnderTest.actuatorStep(actuatorTimestep, simTimeSec, dataPacket);            
             [numDiscardedSeq, ~] = this.ncsPlantUnderTest.getActuatorStatsForTimestep(actuatorTimestep);
             expectedMode = dataPacket.packetDelay + 1;
            
@@ -248,14 +356,20 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
         
         %% testChangeActuatorSequenceLengthBufferedPacket
         function testChangeActuatorSequenceLengthBufferedPacket(this)
-            plantState = [2 3 4]';
-            maxActuatorSteps = 100;
-            maxPlantSteps = maxActuatorSteps;     
+            maxPlantSteps = 1000;
+            plantState = [2 3 4]';      
             actuatorTimestep = 2;
+            simTimeSec = 2; % for simplicity, 1 time step = 1 second
                         
-            this.ncsPlantUnderTest.init(plantState);                       
-            this.ncsPlantUnderTest.initStatisticsRecording(maxPlantSteps, maxActuatorSteps);            
-            this.assertNotEmpty(this.ncsPlantUnderTest.getStatistics(maxActuatorSteps));
+            this.ncsPlantUnderTest.init(plantState, maxPlantSteps);                       
+            this.ncsPlantUnderTest.initStatisticsRecording(maxPlantSteps);            
+            this.assertNotEmpty(this.ncsPlantUnderTest.getStatistics(maxPlantSteps));
+            
+            % perform two steps to reach timestep 3            
+            this.ncsPlantUnderTest.actuatorStep(1, 1, []);
+            this.ncsPlantUnderTest.plantStep(1, 1);
+            this.ncsPlantUnderTest.actuatorStep(2, 2, []);
+            this.ncsPlantUnderTest.plantStep(2, 2);
             
             id= 42;
             dataPacket = DataPacket(this.controlSequence, actuatorTimestep, id);
@@ -263,8 +377,9 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             dataPacket.sourceAddress = 2;
             dataPacket.destinationAddress = 1;
                         
-            % perform a step first so that packet is buffered
-            [~, controllerAcks] = this.ncsPlantUnderTest.actuatorStep(actuatorTimestep + dataPacket.packetDelay, dataPacket);
+            % perform a step first (at time step 3) so that packet is buffered
+            [~, controllerAcks] = this.ncsPlantUnderTest.actuatorStep(...
+                actuatorTimestep + dataPacket.packetDelay, simTimeSec + dataPacket.packetDelay, dataPacket);
             [numDiscardedSeq, ~] = this.ncsPlantUnderTest.getActuatorStatsForTimestep(actuatorTimestep + dataPacket.packetDelay);
                         
             this.assertNotEmpty(controllerAcks); % assert that a packet is buffered
@@ -275,7 +390,8 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             this.ncsPlantUnderTest.changeActuatorSequenceLength(newSeqLength);
             caPackets = [];
             % then perform a step again
-            [plantMode, controllerAcks] = this.ncsPlantUnderTest.actuatorStep(actuatorTimestep + dataPacket.packetDelay + 1, caPackets);   
+            [plantMode, controllerAcks] = this.ncsPlantUnderTest.actuatorStep(...
+                actuatorTimestep + dataPacket.packetDelay + 1, simTimeSec + dataPacket.packetDelay + 1, caPackets);   
                 
             expectedMode = newSeqLength + 1;
             [numDiscardedSeq, ~] = this.ncsPlantUnderTest.getActuatorStatsForTimestep(actuatorTimestep + dataPacket.packetDelay + 1);
@@ -287,8 +403,9 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
         
         %% testIsStateAdmissible
         function testIsStateAdmissible(this)
+            maxPlantSteps = 10;
             plantState = [2 3 4]';
-            this.ncsPlantUnderTest.init(plantState);
+            this.ncsPlantUnderTest.init(plantState, maxPlantSteps);
             
             this.assertEmpty(this.sysModel.stateConstraints);            
             % no constraints given

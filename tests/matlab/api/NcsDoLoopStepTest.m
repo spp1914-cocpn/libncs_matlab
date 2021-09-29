@@ -7,7 +7,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2018-2020  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2018-2021  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -126,15 +126,14 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             this.filter.setStateMeanAndCov(this.zeroPlantState, 0.5 * eye (this.dimX));
                         
             this.ncs = NetworkedControlSystem(NcsControllerWithFilter(this.controller, this.filter, ...
-                    DelayedKFSystemModel(this.A, this.B, Gaussian(zeros(this.dimX, 1), this.W), ...
-                    this.controlSeqLength + 1, this.maxMeasDelay, [1/3 1/3 1/3]), ...
-                    this.sensor, zeros(this.dimU, 1), [1/4 1/4 1/4 1/4]'), ...
+                    LinearPlant(this.A, this.B, this.W), this.sensor, ...
+                    zeros(this.dimU, 1), [1/4 1/4 1/4 1/4]'), ...
                 NcsPlant(LinearPlant(this.A, this.B, this.W), ...
                     BufferingActuator(this.controlSeqLength, zeros(this.dimU, 1))), ...
                 NcsSensor(this.sensor), 'NCS', this.tickerInterval, this.plantTickerInterval, NetworkType.TcpLike);
-            this.ncs.initPlant(this.zeroPlantState);
             
             maxSimTime = ConvertToPicoseconds(this.maxPlantSteps * this.plantTickerInterval);
+            this.ncs.initPlant(this.zeroPlantState, maxSimTime);           
             this.ncs.initStatisticsRecording(maxSimTime);
             
             % setup the translator
@@ -146,34 +145,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
         end
     end
     
-    methods (Test)
-       %% testInvalidHandle
-        function testInvalidHandle(this)
-            expectedErrId = 'ComponentMap:InvalidComponentType';
-            
-            invalidHandle = this.componentMap.addComponent(this); % invalid type
-            this.verifyError(@() ncs_doLoopStep(invalidHandle, this.timestamp), expectedErrId);
-            
-            expectedErrId = 'ComponentMap:InvalidIndex';
-            
-            invalidHandle = this.ncsHandle + 2; % not a valid index
-            this.verifyError(@() ncs_doLoopStep(invalidHandle, this.timestamp), expectedErrId);
-        end
-        
-        %% testInvalidTimestamp
-        function testInvalidTimestamp(this)
-            expectedErrId = 'ncs_doLoopStep:InvalidTimestamp';
-            
-            invalidTimestamp = this; % not a scalar
-            this.verifyError(@() ncs_doLoopStep(this.ncsHandle, invalidTimestamp), expectedErrId);
-            
-            invalidTimestamp = 0; % integer, but not positive            
-            this.verifyError(@() ncs_doLoopStep(this.ncsHandle, invalidTimestamp), expectedErrId);
-            
-            invalidTimestamp = 1.5; % positive, but fractional            
-            this.verifyError(@() ncs_doLoopStep(this.ncsHandle, invalidTimestamp), expectedErrId);
-        end
-        
+    methods (Test)         
         %% testInvalidParamStruct
         function testInvalidParamStruct(this)
             expectedErrId = 'ncs_doLoopStep:InvalidParamStruct';
@@ -184,6 +156,19 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             newInvalidStruct(2).A = 5; 
             newInvalidStruct(1).A = 5; % not a scalar struct
             this.verifyError(@() ncs_doLoopStep(this.ncsHandle, this.timestamp, newInvalidStruct), expectedErrId);
+        end
+        
+        %% testInvalidHandle
+        function testInvalidHandle(this)
+            expectedErrId = 'ComponentMap:InvalidComponentType';
+            
+            invalidHandle = this.componentMap.addComponent(this); % invalid type
+            this.verifyError(@() ncs_doLoopStep(invalidHandle, this.timestamp), expectedErrId);
+            
+            expectedErrId = 'ComponentMap:InvalidIndex';
+            
+            invalidHandle = this.ncsHandle + 2; % not a valid index
+            this.verifyError(@() ncs_doLoopStep(invalidHandle, this.timestamp), expectedErrId);
         end
         
         %% testInvalidAcPacket
@@ -251,7 +236,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             import matlab.unittest.constraints.IsLessThanOrEqualTo
             import matlab.unittest.constraints.IsOfClass
             
-            [pktsOut, qocOut, stats] = ncs_doLoopStep(this.ncsHandle, timestep);
+            [pktsOut, qocOut, stats, stateAdmissible] = ncs_doLoopStep(this.ncsHandle, timestep);
             
             % check that qoc is nonnegative scalar
             this.verifyThat(qocOut, IsScalar);
@@ -301,6 +286,11 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             this.verifySize(pktsOut, [2 1]);
             this.verifyClass(pktsOut{1}, ?DataPacket);
             this.verifyClass(pktsOut{2}, ?DataPacket);
+            
+            % check the returned flag
+            this.verifyThat(stateAdmissible, IsScalar);
+            this.verifyThat(stateAdmissible, IsOfClass(?logical));
+            this.verifyTrue(stateAdmissible);
             
             % verify the side effect
             % packet buffer should no longer contain packets for the NCS

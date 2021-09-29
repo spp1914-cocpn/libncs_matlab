@@ -24,12 +24,14 @@ ifneq (,$(wildcard $(MAKECONF)))
 	include $(MAKECONF)
 endif
 
-# use open mp for mex files by default
+# use open mp for mex and armadillo files by default
 OPENMP ?= 1
 ifeq ($(OPENMP),1)
     OPENMP_FLAG = -fopenmp
+    ARMA_OPENMP_FLAG =
 else
     OPENMP_FLAG =
+    ARMA_OPENMP_FLAG = -DARMA_DONT_USE_OPENMP
 endif
 
 MEX = mex
@@ -48,12 +50,11 @@ MEX_SRC := $(MEX_SRC_DIR_MTIMESX)/mtimesx.c $(wildcard $(MEX_SRC_DIR_SDPT)/*.c)
 MEX_OUT_FILES := $(addprefix $(MEX_BUILD_DIR)/, $(notdir $(MEX_SRC:.c=.mexa64)))
 
 # own mex files (C++)
-#armadillo requires blas/openblas and lapack (and not mwlapack)
 MEX_ADD_SRC_DIR = $(MLIB_DIR)/Classes/
 MEX_ADD_SRC :=  $(shell find $(MEX_ADD_SRC_DIR) -wholename '*/mex/*/*.cpp')
 MEX_ADD_OUT_FILES := $(addprefix $(MEX_BUILD_DIR)/, $(notdir $(MEX_ADD_SRC:.cpp=.mexa64)))
 MEX_ADD_INC_DIRS = $(MLIB_DIR)/external/armadillo/include $(MLIB_DIR)/external/armadillo/mex_interface
-MEX_ADD_FLAGS = -DARMA_BLAS_LONG_LONG -DARMA_DONT_USE_WRAPPER -DARMA_NO_DEBUG -lmwlapack $(addprefix -I, $(MEX_ADD_INC_DIRS))
+MEX_ADD_FLAGS = $(ARMA_OPENMP_FLAG) -DARMA_BLAS_LONG_LONG -DARMA_DONT_USE_WRAPPER -DARMA_NO_DEBUG -lmwlapack -lmwblas $(addprefix -I, $(MEX_ADD_INC_DIRS))
 
 VPATH=$(dir $(MEX_SRC)) $(dir $(MEX_ADD_SRC))
 
@@ -82,14 +83,16 @@ $(MEX_BUILD_DIR)/%.mexa64: %.c
 $(MEX_BUILD_DIR)/%.mexa64: %.cpp
 	$(MEX) $(MEX_FLAGS) $(MEX_CXXFLAGS) $(MEX_ADD_FLAGS) $(MEX_COPTIMFLAGS) $(MEX_LDFLAGS) $(MEX_LDOPTIMFLAGS) -output $@ $<
 
-clean cleanall:
+cleanmex:
+	@rm -f $(MEX_BUILD_DIR)/*.mexa64
+
+clean cleanall: cleanmex
 	@rm -f $(BUILD_DIR)/$(LIBNAME).*
 	@rm -f $(BUILD_DIR)/mccExcludedFiles.log
 	@rm -f $(BUILD_DIR)/readme.txt
 	@rm -f $(BUILD_DIR)/requiredMCRProducts.txt
 	@rm -f $(BUILD_DIR)/v2/generic_interface/$(LIBNAME).*
 	@rm -f $(BUILD_DIR)/v2/generic_interface/readme.txt
-	@rm -f $(MEX_BUILD_DIR)/*.mexa64
 	
-.PHONY: all lib clean mex
+.PHONY: all lib clean mex cleanmex
 

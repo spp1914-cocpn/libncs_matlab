@@ -7,7 +7,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2017-2020  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2017-2021  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -100,12 +100,11 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
 %%
         %% testGetDataRateForQoc
         function testGetDataRateForQoc(this)
-            actualQoc = 0.5;
             targetQoc = 0.75;
             expectedDataRate = targetQoc ^ 2 + 2 * targetQoc + 3;
             expectedRateChange = 2 * targetQoc + 2; % derivate of qocRateCurve w.r.t. targetQoc
             
-            [actualDataRate, actualRateChange] = this.translatorUnderTest.getDataRateForQoc(actualQoc, targetQoc);
+            [actualDataRate, actualRateChange] = this.translatorUnderTest.getDataRateForQoc(targetQoc);
             this.verifyEqual(actualDataRate, expectedDataRate, 'AbsTol', 1e-10);
             this.verifyEqual(actualRateChange, expectedRateChange, 'AbsTol', 1e-10);
             
@@ -114,7 +113,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             expectedDataRate = this.maxDataRate;
             expectedRateChange = 2 * targetQoc + 2; % derivate of qocRateCurve w.r.t. targetQoc
             
-            [actualDataRate, actualRateChange] = this.translatorUnderTest.getDataRateForQoc(actualQoc, targetQoc);
+            [actualDataRate, actualRateChange] = this.translatorUnderTest.getDataRateForQoc(targetQoc);
             this.verifyEqual(actualDataRate, expectedDataRate, 'AbsTol', 1e-10);
             this.verifyEqual(actualRateChange, expectedRateChange, 'AbsTol', 1e-10);
         end
@@ -122,18 +121,23 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
 %%        
         %% testGetQocForDataRate
         function testGetQocForDataRate(this)
-            actualQoc = 0.5;
             targetRate = this.maxDataRate;
             expectedQoc = sqrt(targetRate - 2) - 1; % evaluate the inverse function, which is y = sqrt(x-2) -1
             
-            actualQoc = this.translatorUnderTest.getQocForDataRate(actualQoc, targetRate);
+            actualQoc = this.translatorUnderTest.getQocForDataRate(targetRate);
             this.verifyEqual(actualQoc, expectedQoc, 'AbsTol', 1e-10);
             
             targetRate = 2.1;
             expectedQoc = 0; % expected qoc value should never be negative, so check if clamped correctly
             
-            actualQoc = this.translatorUnderTest.getQocForDataRate(actualQoc, targetRate);
+            actualQoc = this.translatorUnderTest.getQocForDataRate(targetRate);
             this.verifyEqual(actualQoc, expectedQoc);
+            
+            targetRate = [2.1 5 6]';
+            expectedQoc = [0, sqrt(targetRate(2) - 2) - 1, 1]';
+            
+            actualQoc = this.translatorUnderTest.getQocForDataRate(targetRate);
+            this.verifyEqual(actualQoc, expectedQoc, 'AbsTol', 1e-10);
         end
 %%
 %%        
@@ -153,6 +157,60 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             
             controlError = 0;
             expectedQoc = 1; % upper bound
+            actualQoc = this.translatorUnderTest.translateControlError(controlError);
+            this.verifyEqual(actualQoc, expectedQoc);
+            
+            % now check if nan and inf are accepted, should return 0
+            controlError = nan;
+            expectedQoc = 0;
+            actualQoc = this.translatorUnderTest.translateControlError(controlError);
+            this.verifyEqual(actualQoc, expectedQoc);
+            
+            controlError = -nan;
+            expectedQoc = 0;
+            actualQoc = this.translatorUnderTest.translateControlError(controlError);
+            this.verifyEqual(actualQoc, expectedQoc);
+            
+            controlError = inf;
+            expectedQoc = 0;
+            actualQoc = this.translatorUnderTest.translateControlError(controlError);
+            this.verifyEqual(actualQoc, expectedQoc);
+            
+            controlError = -inf;
+            expectedQoc = 0;
+            actualQoc = this.translatorUnderTest.translateControlError(controlError);
+            this.verifyEqual(actualQoc, expectedQoc);
+        end
+        
+        %% testTranslateControlErrorVector
+        function testTranslateControlErrorVector(this)
+            controlError = [2.5 2 2.5];
+            expectedQoc = -0.5 .* controlError + 2; % evaluate function            
+            
+            actualQoc = this.translatorUnderTest.translateControlError(controlError);
+            this.verifyEqual(actualQoc, expectedQoc, 'AbsTol', 1e-10);
+            
+            % check if clamped correctly
+            controlError = [10; 42; 10];
+            expectedQoc = [0 0 0]'; % lower bound
+            actualQoc = this.translatorUnderTest.translateControlError(controlError);
+            this.verifyEqual(actualQoc, expectedQoc);
+            
+            controlError = [0 0 0 0 0];
+            expectedQoc = [1 1 1 1 1]; % upper bound
+            actualQoc = this.translatorUnderTest.translateControlError(controlError);
+            this.verifyEqual(actualQoc, expectedQoc);
+            
+            % add a nan value
+            controlError = [2.5 2 nan 2.5];
+            expectedQoc = zeros(size(controlError));
+            expectedQoc([1 2 4]) = -0.5 .* controlError([1 2 4]) + 2; % evaluate function 
+            actualQoc = this.translatorUnderTest.translateControlError(controlError);
+            this.verifyEqual(actualQoc, expectedQoc);
+            
+            controlError = [2.5 -nan 2 2.5];
+            expectedQoc = zeros(size(controlError));
+            expectedQoc([1 3 4]) = -0.5 .* controlError([1 3 4]) + 2; % evaluate function 
             actualQoc = this.translatorUnderTest.translateControlError(controlError);
             this.verifyEqual(actualQoc, expectedQoc);
         end

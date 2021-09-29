@@ -3,18 +3,18 @@ function picoseconds = ConvertToPicoseconds(seconds)
     % pico-seconds.
     %
     % Parameters:
-    %   >> seconds (Scalar)
-    %      A scalar denoting a time value in seconds. 
+    %   >> seconds (Matrix)
+    %      A matrix containing time values in seconds. 
     %
     % Returns:
-    %   >> picoseconds (Scalar)
-    %      The corresponding value in pico-seconds.
+    %   >> picoseconds (Matrix)
+    %      The corresponding values in pico-seconds.
     
     % >> This function/class is part of CoCPN-Sim
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2017  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2017-2021  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)

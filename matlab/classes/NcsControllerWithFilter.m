@@ -1,12 +1,23 @@
 classdef NcsControllerWithFilter < NcsController
     % Wrapper class for controllers that require an external filter in an NCS to provide a consistent
     % interface.
+    %
+    % Literature: 
+    %  	Florian Rosenthal, Markus Jung, Martina Zitterbart, and Uwe D. Hanebeck,
+    %   CoCPN - Towards Flexible and Adaptive Cyber-Physical Systems Through Cooperation,
+    %   Proceedings of the 2019 16th IEEE Annual Consumer Communications & Networking Conference,
+    %   Las Vegas, Nevada, USA, January 2019.
+    %      
+    %   Markus Jung, Florian Rosenthal, and Martina Zitterbart,
+    %   CoCPN-Sim: An Integrated Simulation Environment for Cyber-Physical Systems,
+    %   Proceedings of the 2018 IEEE/ACM Third International Conference on Internet-of-Things Design and Implementation (IoTDI), 
+    %   Orlando, FL, USA, April 2018.
     
     % >> This function/class is part of CoCPN-Sim
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2017-2020  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2017-2021  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -35,7 +46,7 @@ classdef NcsControllerWithFilter < NcsController
     
     properties (SetAccess = private, GetAccess = protected)
         bufferedControlInputSequences;
-        bufferedCaDelayProbs; % buffers the ca Delay probs from the current an the past N-1 time steps, where N is the sequence length        
+        bufferedCaDelayProbs; % buffers the ca Delay probs from the current an the past N-1 time steps, where N is the sequence length
     end
     
     properties (Access = protected)
@@ -130,10 +141,26 @@ classdef NcsControllerWithFilter < NcsController
             % we make use of a dedicated filter to obtain the state
             % estimate
             
-            % first, update the estimate, i.e., obtain x_k
-            [numUsedMeas, numDiscardedMeas, previousMode] ...
-                = this.updateControllerState(scPackets, acPackets, timestep, plantMode);
-           
+            try
+                % first, update the estimate, i.e., obtain x_k                
+                [numUsedMeas, numDiscardedMeas, previousMode] = this.doUpdateEstimateFun(scPackets, acPackets, timestep, plantMode);
+            catch ex
+                % an error occurred during the filter step
+                warning('NcsControllerWithFilter:DoStep:ErrorInUpdateStateEstimate', ...
+                    '** An error occurred during the update of the controller state:\n\n%s\n\nSimulation can proceed but error flag will be set and no input sequence will be computed **', ...
+                    ex.getReport('basic', 'hyperlinks', 'off'));
+                inputSequence = [];
+                controllerState = this.getControllerState();
+                numUsedMeas = 0;
+                numDiscardedMeas = 0;
+                this.errorOccurred = true;
+                return
+            end
+            % if previous true mode is unknown, some sort of certainty equivalence: use mode estimate
+            % instead of true mode, so check that either is present
+            assert(~isempty(previousMode) || ~isempty(plantMode), ...
+                [class(this) ':Step:MissingPreviousPlantMode'], ...
+                '** Cannot compute U_k: Neither previous plant mode nor its estimate present **');
             % compute the control inputs u_k, ..., u_{k+N}, i.e, sequence U_k
             % use (previous!) true mode (theta_{k-1}) or estimated mode of augmented system
             % and use xhat_k
@@ -165,56 +192,12 @@ classdef NcsControllerWithFilter < NcsController
             %      The controller's current estimate of the plant state.
             %      
             [controllerState, ~] = this.filter.getStateMeanAndCov();
-                % shift controller state if required, to be expressed with
-                % regards to the plant coordinates
-                if ~isempty(this.plantStateOrigin)
-                    controllerState = controllerState + this.plantStateOrigin;
-                end
-        end
-        
-        %% updateControllerState
-        function [numUsedMeas, numDiscardedMeas, previousMode] = updateControllerState(this, scPackets, acPackets, timestep, plantMode)
-            % Update the controller state, i.e., the estimate of the plant
-            % state (x^e_{k}), by performing a combined time and measurement update
-            % of the associated filter.
-            %
-            % Parameters:
-            %   >> scPackets (Array of DataPackets, might be empty)
-            %      An array of DataPackets containing measurements taken and transmitted from the sensor.
-            %
-            %   >> acPackets (Array of DataPackets, might be empty)
-            %      An array of DataPackets containing ACKs returned from the actuator.
-            %   
-            %   >> timestep (Positive integer)
-            %      The current time step, i.e., the integer yielding the
-            %      current simulation time (in s) when multiplied by the
-            %      loop's sampling interval.
-            %     
-            %   >> plantMode (Nonnegative integer, might be empty)
-            %      The previous true plant mode (theta_{k-1}), or the empty
-            %      matrix, if not directly known to the controller.
-            % 
-            % Returns:
-            %   << numUsedMeas (Nonnegative integer)
-            %      The number of measurements actually used for the
-            %      computation of the control sequence.
-            %
-            %   << numDiscardedMeas (Nonnegative integer)
-            %      The number of measurements which were discarded due to
-            %      a too large delay.
-            %
-            %   << previousMode (Nonnegative integer)
-            %      The controller's estimate of the previous plant mode
-            %      (theta_{k-1}), which is equal to the passed <plantMode> if provided. 
-            % 
-
-           [numUsedMeas, numDiscardedMeas, previousMode] = this.doUpdateEstimateFun(scPackets, acPackets, timestep, plantMode);
-            % if previous true mode is unknown, some sort of certainty equivalence: use mode estimate
-            % instead of true mode, so check that either is present
-            assert(~isempty(previousMode) || ~isempty(plantMode), ...
-                [class(this) ':Step:MissingPreviousPlantMode'], ...
-                '** Cannot compute U_k: Neither previous plant mode nor its estimate present **');
-        end
+            % shift controller state if required, to be expressed with
+            % regards to the plant coordinates
+            if ~isempty(this.plantStateOrigin)
+                controllerState = controllerState + this.plantStateOrigin;
+            end
+        end        
         
         %% updateControlSequencesBuffer
         function updateControlSequencesBuffer(this, controlSequenceToBuffer)
@@ -271,16 +254,11 @@ classdef NcsControllerWithFilter < NcsController
         
         %% canChangeCaDelayProbs
         function ret = canChangeCaDelayProbs(this)
-            switch class(this.controller)
-                case {'NominalPredictiveController', 'ExpectedInputPredictiveController', 'InfiniteHorizonController'}
-                    ret = true;
-                otherwise
-                    ret = false;
-            end
+            ret = canChangeCaDelayProbs@NcsController(this) || Checks.isClass(this.controller, 'NominalPredictiveController');
         end
         
         %% doChangeCaDelayProbs
-        function doChangeCaDelayProbs(this, caDelayProbs)
+        function doChangeCaDelayProbs(this, caDelayProbs)            
             % given probability distribution has already been validated, so
             % adapt to number of modes
             probs = Utility.truncateDiscreteProbabilityDistribution(caDelayProbs, ...
@@ -295,33 +273,24 @@ classdef NcsControllerWithFilter < NcsController
 
             if Checks.isClass(this.controller, 'InfiniteHorizonController')
                 this.controller.changeTransitionMatrix(newTransitionMatrix);
-            elseif Checks.isClass(this.controller, 'ExpectedInputPredictiveController')
+            elseif Checks.isClass(this.controller, 'CaDelayProbsChangeable')
                 this.controller.changeCaDelayProbs(caDelayProbs);
             end
-                        
-            switch class(this.filter)
-                case 'DelayedModeIMMF'
-                    % we change the mode transition matrix of the underlying MJLS
-                    this.filter.setModeTransitionMatrix(newTransitionMatrix);    
-                case 'DelayedKF'
-                    % we change the resulting weights for all possible inputs
-                    this.filter.setModeTransitionMatrix(newTransitionMatrix);
+            
+            if Checks.isClass(this.filter, 'ModeTransitionMatrixChangeable')
+                % adapt the transition matrix (mode theta_k) used by the filters
+                this.filter.setModeTransitionMatrix(newTransitionMatrix);
             end
+            
             this.caDelayProbsChanged = true;  % indicate that change ocurred
-        end
-
-%%
-        %% canChangeModelParameters
-        function ret = canChangeModelParameters(this)
-            ret = Checks.isClass(this.controller, 'NominalPredictiveController');                
-        end
+        end     
         
         %% doChangeModelParameters
-        function doChangeModelParameters(this, newA, newB, newW, ~)
+        function doChangeModelParameters(this, newA, newB, newW)            
             % only supported for scenarios where inverted pendulum is to be
-            % stabilized               
-            switch class(this.filter)
-                case 'DelayedModeIMMF'
+            % stabilized
+            switch metaclass(this.plantModel) % the plant models used by the filter must be updated
+                case ?JumpLinearSystemModel
                     sysModels = this.plantModel.modeSystemModels;
                     for j=1:this.controlSequenceLength + 1
                         % change the affected parameters of the model
@@ -329,15 +298,14 @@ classdef NcsControllerWithFilter < NcsController
                         sysModels{j}.setSystemInputMatrix(newB);
                         sysModels{j}.setNoise(newW);
                     end
-                case 'DelayedKF'
+                case ?LinearPlant
                     this.plantModel.setSystemMatrix(newA);
-                    this.plantModel.setPlantInputMatrix(newB);
-                    % we also need a new process noise                
-                    this.plantModel.changeNoise(Gaussian(zeros(size(newW, 1), 1), newW));
-            end                
+                    this.plantModel.setSystemInputMatrix(newB);
+                    this.plantModel.setNoise(newW);
+            end         
             % and we update the controller, results in a recomputation of
             % the gain
-            this.controller.changeModelParameters(newA, newB);
+            this.controller.changeModelParameters(newA, newB, newW);
         end
 %%       
     end
@@ -396,7 +364,7 @@ classdef NcsControllerWithFilter < NcsController
                 end
                 [measurements, measDelays] = NcsController.processScPackets(scPackets);
                 
-                this.distributePossibleSystemInputs();
+                this.plantModel.setSystemInput(this.getPossibleSystemInputs());
                 
                 this.filter.step(this.plantModel, this.measModel, ...
                     measurements, measDelays, modeObservations, modeDelays);
@@ -422,7 +390,7 @@ classdef NcsControllerWithFilter < NcsController
                 end
                 [measurements, measDelays] = NcsController.processScPackets(scPackets);
                 
-                this.distributePossibleSystemInputs();
+                this.filter.setPossibleInputs(this.getPossibleSystemInputs());
                 
                 this.filter.step(this.plantModel, this.measModel, ...
                     measurements, measDelays, modeObservations, modeDelays);
@@ -435,16 +403,15 @@ classdef NcsControllerWithFilter < NcsController
             end
             previousModeEstimate = this.filter.getPreviousModeEstimate();
         end
-        
-        %% distributePossibleSystemInputs
-        function distributePossibleSystemInputs(this)
+               
+        %% getPossibleSystemInputs
+        function possibleInputs = getPossibleSystemInputs(this)
             % distribute the possible inputs to all modes
-            modeSpecificInputs = arrayfun(@(mode) this.bufferedControlInputSequences(:, mode, mode), ...
-                    1:this.controlSequenceLength, 'UniformOutput', false);
-            % include the default input for the last mode 
-            this.plantModel.setSystemInput([cell2mat(modeSpecificInputs) this.defaultInput]);
-        end       
-       
+            % include the default input for the last mode
+            possibleInputs = [cell2mat(arrayfun(@(mode) this.bufferedControlInputSequences(:, mode, mode), ...
+                    1:this.controlSequenceLength, 'UniformOutput', false)) this.defaultInput];
+        end
+        
     end   
 end
 

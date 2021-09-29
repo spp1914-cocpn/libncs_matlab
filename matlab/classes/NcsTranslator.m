@@ -6,12 +6,22 @@ classdef NcsTranslator < handle
     %   CoCPN - Towards Flexible and Adaptive Cyber-Physical Systems Through Cooperation,
     %   Proceedings of the 2019 16th IEEE Annual Consumer Communications & Networking Conference,
     %   Las Vegas, Nevada, USA, January 2019.
+    %
+    %   Markus Jung, Florian Rosenthal, and Martina Zitterbart,
+    %   CoCPN-Sim: An Integrated Simulation Environment for Cyber-Physical Systems,
+    %   Proceedings of the 2018 IEEE/ACM Third International Conference on Internet-of-Things Design and Implementation (IoTDI), 
+    %   Orlando, FL, USA, April 2018.
+    %
+    %   Florian Rosenthal and Uwe D. Hanebeck,
+    %   A Control Approach for Cooperative Sharing of Network Resources in Cyber-Physical Systems,
+    %   Proceedings of the 2019 IEEE International Conference on Industrial Cyber-Physical Systems (ICPS 2019), 
+    %   Taipei, Taiwan, May 2019.
     
     % >> This function/class is part of CoCPN-Sim
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2017-2020  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2017-2021  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -36,6 +46,12 @@ classdef NcsTranslator < handle
         qocRateCurve (1,1) fittype; % to be extended to sfit, rate = r(QoC_actual, QoC_desired)
         controlErrorQocCurve (1,1) fittype; % function f: qoc=f(error)
         maxPossibleRate (1,1) double {mustBePositive, mustBeFinite} = 100;
+        
+        minAllowedRate (1,1) double {mustBePositive, mustBeFinite} = 0.1;        
+    end
+  
+    properties (Access = public)    
+        qocTarget = 1;
     end
     
     methods (Access = public)
@@ -68,42 +84,39 @@ classdef NcsTranslator < handle
         end
         
         %% getDataRateForQoC
-        function [rate, rateChange] = getDataRateForQoc(this, actualQoc, targetQoc)
-            % Get the data rate required to reach a target control performance (QoC) given an actual QoC
+        function [rate, rateChange] = getDataRateForQoc(this, targetQoc)
+            % Get the data rate required to reach a target control performance (QoC)
             % according to the underlying communication characteristics (i.e., the model relating data rate and control performance).
             %
             % Parameters:
-            %   >> actualQoc (Nonnegative scalar)
-            %      The current actual QoC of the NCS (or the controller's estimate thereof), given in terms of a
-            %      value in [0,1].
-            %
-            %   >> targetQoc (Nonnegative scalar)
+            %   >> targetQoc (Nonnegative matrix or vector)
             %      The desired QoC of the NCS, given in terms of a
             %      value in [0,1].
+            %      This function supports an arbitrary number of values,
+            %      passed as vectors or matrices.
             %
             % Returns:
-            %   << rate (Nonnegative scalar)
+            %   << rate (Nonnegative vector or matrix)
             %      The data rate (in packets per second) required to
-            %      reach the target QoC, based on the underlying communication
+            %      reach the respective target QoC, based on the underlying communication
             %      characteristics. The maximum value to be returned is
             %      this.maxPossibleRate.
             %
-            %   << rateChange (Nonnegative scalar, optional)
+            %   << rateChange (Nonnegative vector or matrix, optional)
             %      The partial derivative of the underlying communication
             %      model with regards to the target QoC, evaluated at the
-            %      given value.
+            %      given values.
             
             arguments
                 this
-                actualQoc(1,1) double {mustBeGreaterThanOrEqual(actualQoc, 0), mustBeLessThanOrEqual(actualQoc, 1)}
-                targetQoc(1,1) double {mustBeGreaterThanOrEqual(targetQoc, 0), mustBeLessThanOrEqual(targetQoc, 1)}
+                targetQoc double {mustBeGreaterThanOrEqual(targetQoc, 0), mustBeLessThanOrEqual(targetQoc, 1)}
             end
             
             % so far, the curve is static
             rate = this.qocRateCurve(targetQoc);
                        
             %normalize rate: nonnegative and <= maxPossibleRate packets per second
-            rate = min(max(0, rate), this.maxPossibleRate);
+            rate = min(max(this.minAllowedRate, rate), this.maxPossibleRate);
             
             if nargout == 2
                 % differentiate with regards to targetQoC (i.e., partial
@@ -113,56 +126,69 @@ classdef NcsTranslator < handle
         end
         
         %% getQocForDataRate
-        function qoc = getQocForDataRate(this, actualQoc, targetRate)
-            % Get the control performance (QoC) that can be achieved, given an actual QoC and a desired data rate,
+        function qoc = getQocForDataRate(this, targetRate)
+            % Get the control performance (QoC) that can be achieved, given a desired data rate,
             % according to the underlying communication characteristics (i.e., the model relating data rate and control performance).
             %
-            % Parameters:
-            %   >> actualQoc (Nonnegative scalar)
-            %      The current actual QoC of the NCS (or the controller's estimate thereof), given in terms of a
-            %      value in [0,1].
-            %
-            %   >> targetRate (Nonnegative scalar)
+            % Parameters:           
+            %   >> targetRate (Nonnegative vector or matrix)
             %      The desired data rate (in packets per second).
+            %      This function supports an arbitrary number of values,
+            %      passed as vectors or matrices.
             %
             % Returns:
-            %   << qoc (Nonnegative scalar)
-            %      The QoC that can be achieved given the values of actual QoC and desired data rate,
+            %   << qoc (Nonnegative vector or matrix)
+            %      The QoC that can be achieved given a desired data rate,
             %      computed based on the underlying communication characteristics of the NCS.
            
             arguments
                 this
-                actualQoc(1,1) double {mustBeGreaterThanOrEqual(actualQoc, 0), mustBeLessThanOrEqual(actualQoc, 1)}
-                targetRate(1,1) double {mustBeNonnegative}
+                targetRate double {mustBeNonnegative}
             end
                         
             % we want the QoC value that can be achieved with the given rate
             % when the current actual QoC is known
-            
-            % so far, the curve is static, independent of actualQoC
-            % check if we have to clamp
-            if this.qocRateCurve(0) > targetRate
-                qoc = 0;
-            elseif this.qocRateCurve(1) < targetRate
-                qoc = 1;
-            else
-                % numerically, find the inverse (translation into root finding problem)
-                % there must be a zero (root) of qocRateCurve(x)-y within
-                % [0,1]
-                qoc = fzero(@(x) this.qocRateCurve(x) - targetRate, [0 1]);
+            qoc = zeros(size(targetRate));
+            for j=1:numel(targetRate)
+                % so far, the curve is static, independent of actualQoC
+                % check if we have to clamp
+                if this.qocRateCurve(1) < targetRate(j)
+                    qoc(j) = 1;
+                elseif this.qocRateCurve(0) <= targetRate(j)
+                    % numerically, find the inverse (translation into root finding problem)
+                    % there must be a zero (root) of qocRateCurve(x)-y within
+                    % [0,1]
+                    qoc(j) = fzero(@(x) this.qocRateCurve(x) - targetRate(j), [0 1]);
+                end
             end
-            % clamp to ensure that return value is nonnegative
-            %qoc = max(0, qoc);
         end
         
         %% translateControlError
-        function qoc = translateControlError(this, controlError)
+        function qoc = translateControlError(this, controlErrors)
+            % Get the control performance (QoC) that corresponds to a given control error
+            % according to the underlying communication characteristics (i.e., the model relating data rate and control performance).
+            %
+            % Parameters:
+            %   >> controlErrors (Vector or matrix)
+            %      Control errors that shall be translated into QoC.
+            %      This function supports an arbitrary number of values,
+            %      passed as vectors or matrices.
+            %
+            % Returns:
+            %   << qoc (Nonnegative vector or matrix)
+            %      The QoC values in [0, 1] corresponding to the given control errors.
+
+            % vectorized
             arguments
                 this
-                controlError(1,1) double {mustBeNonnegative}
+                controlErrors double {mustBeReal}
             end
+            
+            % allow +/-inf and +/-nan
+            controlErrors(~isfinite(controlErrors)) = inf;
+
             % qoc is in unit interval [0,1]
-            qoc = min(1, max(this.controlErrorQocCurve(controlError), 0));
+            qoc = min(1, max(arrayfun(@this.controlErrorQocCurve, controlErrors), 0));
         end
     end
     

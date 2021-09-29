@@ -1,7 +1,7 @@
 classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             'libncs_matlab/matlab', 'IncludingSubfolders', true)}) ...
-        NcsGetTickerIntervalTest < matlab.unittest.TestCase
-    % Test cases for the api function ncs_getTickerInterval.
+        NcsGetLinearizationForRateTest < matlab.unittest.TestCase
+    % Test cases for the api function ncs_getRateForQoC.
     
     % >> This function/class is part of CoCPN-Sim
     %
@@ -31,9 +31,9 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
     properties (Access = private)
         ncs;
         ncsHandle;
-        tickerInterval;
-        
         componentMap;
+        
+        samplingInterval;
     end
     
     methods (Access = private)
@@ -41,12 +41,12 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
         function tearDown(this)
             this.componentMap.clear();
             % required to destroy the singleton instance
-            clear ComponentMap;
+            clear ComponentMap;            
         end
     end
     
     methods (TestMethodSetup)
-        %% ncs_getTickerInterval
+        %% init
         function init(this)
             maxMeasDelay = 2;
             controlSeqLength = 2;
@@ -76,42 +76,66 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             controllerSubsystem = NcsControllerWithFilter(controller, filter, ...
                 filterPlantModel, sensor, zeros(dimU, 1), [1/4 1/4 1/4 1/4]');
             
-            this.componentMap = ComponentMap.getInstance();            
-            this.tickerInterval = .2; % 0.2s
+            this.componentMap = ComponentMap.getInstance();
+            this.samplingInterval = 0.1;
             this.ncs = NetworkedControlSystem(controllerSubsystem, plantSubsystem, sensorSubsystem, ...
-                'NCS', this.tickerInterval, NetworkType.TcpLike);
-            this.ncsHandle = this.componentMap.addComponent(this.ncs);
-
+                'NCS', this.samplingInterval, NetworkType.TcpLike);   
+            this.ncsHandle = this.componentMap.addComponent(this.ncs);            
+                       
             this.addTeardown(@tearDown, this);
         end
-    end
+     end
     
     methods (Test)
-        %% testInvalidHandle
+       %% testInvalidHandle
         function testInvalidHandle(this)
             expectedErrId = 'ComponentMap:InvalidComponentType';
             
             invalidHandle = this.componentMap.addComponent(this); % invalid type
-            this.verifyError(@() ncs_getTickerInterval(invalidHandle), expectedErrId);
+            this.verifyError(@() ncs_getLinearizationForRate(invalidHandle, 1, 1), expectedErrId);
             
             expectedErrId = 'ComponentMap:InvalidIndex';
             
             invalidHandle = this.ncsHandle + 2; % not a valid index
-            this.verifyError(@() ncs_getTickerInterval(invalidHandle), expectedErrId);
-        end
+            this.verifyError(@() ncs_getLinearizationForRate(invalidHandle, 1, 1), expectedErrId);
+        end       
         
         %% test
         function test(this)
             import matlab.unittest.constraints.IsScalar
+            import matlab.unittest.constraints.IsEqualTo
+            import matlab.unittest.constraints.AbsoluteTolerance
             
-            expectedTickerInterval = this.tickerInterval * 1e12; % in pico-seconds
-            actualTickerInterval = ncs_getTickerInterval(this.ncsHandle);
+            % sanity check: linearization of linear function
+            qocRateCurve = cfit(fittype('a*x+b'), 2, 2);
+            controlErrorQocCurve = cfit(fittype('a*x^3'), 1.5);            
+            this.ncs.attachTranslator(NcsTranslator(qocRateCurve, controlErrorQocCurve, 1 / this.samplingInterval));          
             
-            % also check that returned values is a scalar and double
-            this.verifyThat(actualTickerInterval, IsScalar);
-            this.verifyClass(actualTickerInterval, ?double);  
+            actualQoC = 0.5;
+            desiredQoC = 1;
+            [slope, yIntercept] = ncs_getLinearizationForRate(this.ncsHandle, actualQoC, desiredQoC);
+            expectedSlope = 2;
+            expectedIntercept = 2;
             
-            this.verifyEqual(actualTickerInterval, expectedTickerInterval);
+            this.verifyThat(slope, IsScalar);
+            this.verifyThat(slope, IsEqualTo(expectedSlope, 'Within', AbsoluteTolerance(1e-8)));
+            this.verifyThat(yIntercept, IsScalar);
+            this.verifyThat(yIntercept, IsEqualTo(expectedIntercept, 'Within', AbsoluteTolerance(1e-8)));
+            
+            % now a quadratic
+            qocRateCurve = cfit(fittype('a*x^2 + b*x+c'), 1, 2, 3);
+            this.ncs.attachTranslator(NcsTranslator(qocRateCurve, controlErrorQocCurve, 1 / this.samplingInterval));
+            
+            actualQoC = 0.5;
+            desiredQoC = 1;
+            [slope, yIntercept] = ncs_getLinearizationForRate(this.ncsHandle, actualQoC, desiredQoC);
+            expectedSlope = 2 * desiredQoC + 2;
+            expectedIntercept = qocRateCurve(desiredQoC) - expectedSlope * desiredQoC;
+            
+            this.verifyThat(slope, IsScalar);
+            this.verifyThat(slope, IsEqualTo(expectedSlope, 'Within', AbsoluteTolerance(1e-8)));
+            this.verifyThat(yIntercept, IsScalar);
+            this.verifyThat(yIntercept, IsEqualTo(expectedIntercept, 'Within', AbsoluteTolerance(1e-8)));
         end
     end
 end

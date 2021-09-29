@@ -7,7 +7,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2018-2020  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2018-2021  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -105,14 +105,12 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             this.filter.setStateMeanAndCov(this.zeroPlantState, 0.5 * eye (this.dimX));
                         
             this.ncs = NetworkedControlSystem(NcsControllerWithFilter(this.controller, this.filter, ...
-                    DelayedKFSystemModel(this.A, this.B, Gaussian(zeros(this.dimX, 1), this.W), ...
-                    this.controlSeqLength + 1, this.maxMeasDelay, [1/3 1/3 1/3]), ...
-                    this.sensor, zeros(this.dimU, 1), [1/4 1/4 1/4 1/4]'), ...
+                    LinearPlant(this.A, this.B, this.W), this.sensor, zeros(this.dimU, 1), [1/4 1/4 1/4 1/4]'), ...
                 NcsPlant(this.plant, BufferingActuator(this.controlSeqLength, zeros(this.dimU, 1))), ...
                 NcsSensor(this.sensor), 'NCS', this.tickerInterval, this.plantTickerInterval, NetworkType.TcpLike);
-            this.ncs.initPlant(this.zeroPlantState);
-            
+                        
             maxSimTime = ConvertToPicoseconds(this.maxPlantSteps * this.plantTickerInterval);
+            this.ncs.initPlant(this.zeroPlantState, maxSimTime);
             this.ncs.initStatisticsRecording(maxSimTime);
             
             this.ncsHandle = this.componentMap.addComponent(this.ncs);            

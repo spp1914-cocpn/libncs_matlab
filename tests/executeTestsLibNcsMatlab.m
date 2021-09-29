@@ -1,11 +1,16 @@
-function results = executeTestsLibNcsMatlab()
+function results = executeTestsLibNcsMatlab(runInParallel)
     % Function to run all test cases in libncs_matlab/tests/matlab.
+    %
+    % Parameters:
+    %   >> runInParallel (Flag, (i.e., a logical scalar), Optional)
+    %      A flag to indicate whether the some of the test cases shall be ran in
+    %      parallel. If left out, the default value <true> is used.
     
     % >> This function/class is part of CoCPN-Sim
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2017-2020  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2017-2021  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -26,13 +31,16 @@ function results = executeTestsLibNcsMatlab()
     %    You should have received a copy of the GNU General Public License
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+    arguments
+        runInParallel(1,1) logical = true;
+    end
+    
     import matlab.unittest.TestSuite;
     import matlab.unittest.TestRunner;
     
     tests = [
             TestSuite.fromClass(?ComponentMapTest) ...
             TestSuite.fromClass(?DataPacketBufferTest) ...
-            TestSuite.fromClass(?CacheTest) ...
             TestSuite.fromClass(?NcsSensorTest) ...
             TestSuite.fromClass(?NcsControllerTest) ...
             TestSuite.fromClass(?NcsControllerWithFilterTest) ...
@@ -44,6 +52,6 @@ function results = executeTestsLibNcsMatlab()
             TestSuite.fromClass(?NcsTranslatorTest)
         ];
 
-    results = [TestRunner.withTextOutput.run(tests) executeApiTests()];
+    results = [TestRunner.withTextOutput.run(tests) executeApiTests(runInParallel)];
 end
 

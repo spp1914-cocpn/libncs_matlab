@@ -7,7 +7,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2018-2020  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2018-2021  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -29,8 +29,8 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
     
     properties (Access = private)        
-        cacheLocation;
         matFilename;
+        translatorFilename;
         configStruct;
         id;
         
@@ -55,23 +55,22 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
         R;
         
         dummyFile;
+        
+        ncsTranslator;
     end
     
     methods (Access = private)
         %% tearDown
         function tearDown(~)
             ComponentMap.getInstance().clear();
-            Cache.clear();
             % required to destroy the singleton instance
-            clear ComponentMap;            
-            clear Cache;
+            clear ComponentMap;
         end
     end
     
     methods (TestMethodSetup)
         %% init
-        function init(this)
-            
+        function init(this)            
             this.maxSimTime = 1e12;
             
             this.dimX = 3;
@@ -94,11 +93,27 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             this.initialPlantState = zeros(this.dimX, 1); % plant state is already at the origin
             this.controllerClassName = 'NominalPredictiveController';
             
+            qocRateCurve = cfit(fittype('a*x^2+b*x+c'), 1, 2, 3);
+            controlErrorQocCurve = cfit(fittype('-a*x+2'), 0.5); % for simplicity, use linear function
+            maxDataRate = 5.5;
+            
+            this.ncsTranslator = NcsTranslator(qocRateCurve, controlErrorQocCurve, maxDataRate);
+            
             import matlab.unittest.fixtures.WorkingFolderFixture;
             
             this.applyFixture(WorkingFolderFixture);
-            this.cacheLocation = [pwd filesep 'cache'];
             this.matFilename = [pwd filesep 'test.mat'];
+            this.translatorFilename = [pwd filesep 'translator.mat'];
+            
+            % add some content into the translator file, but not an
+            % NcsTranslator
+            translatorFile = matfile(this.translatorFilename, 'Writable', true);
+            translatorFile.dummy = 42;
+            
+            this.dummyFile = [pwd filesep 'dummy.txt'];
+            fid = fopen(this.dummyFile, 'w');
+            fprintf(fid, 'dummy');
+            fclose(fid);
             
             configFile = matfile(this.matFilename, 'Writable', true);
             % A, B, in config describe plant model as used by controller
@@ -120,14 +135,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             this.configStruct.controllerClassName = this.controllerClassName;
             this.configStruct.initialPlantState = this.initialPlantState;
             this.configStruct.caDelayProbs = this.caDelayProbs;
-            this.configStruct.ignoreControllerCache = false;
             
-            Cache.setLocation(this.cacheLocation);
-            
-            this.dummyFile = [pwd filesep 'dummy.txt'];
-            fid = fopen(this.dummyFile, 'w');
-            fprintf(fid, 'dummy');
-            fclose(fid);
             this.addTeardown(@() this.tearDown());
         end
     end
@@ -158,24 +166,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             this.verifyError(@() ncs_initialize(this.maxSimTime, this.id, this.configStruct, invalidFilename), ...
                 expectedErrId);
         end
-        
-        %% testInvalidMaxSimeTime
-        function testInvalidMaxSimeTime(this)
-            expectedErrId = 'ncs_initialize:InvalidMaxSimeTime';
-            
-            invalidMaxSimTime = 0; % not positive
-            this.verifyError(@() ncs_initialize(invalidMaxSimTime, this.id, this.configStruct, this.matFilename), ...
-                expectedErrId);
-            
-            invalidMaxSimTime = eye(3); % not a scalar
-            this.verifyError(@() ncs_initialize(invalidMaxSimTime, this.id, this.configStruct, this.matFilename), ...
-                expectedErrId);
-            
-            invalidMaxSimTime = this; % not a scalar
-            this.verifyError(@() ncs_initialize(invalidMaxSimTime, this.id, this.configStruct, this.matFilename), ...
-                expectedErrId);
-        end
-        
+    
         %% testInvalidFile
         function testInvalidFile(this)
             % ensure that file we use later exists
@@ -187,7 +178,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             this.verifyError(@() ncs_initialize(this.maxSimTime, this.id, this.configStruct, invalidFile), ...
                 expectedErrId);
                         
-            invalidFile = this.cacheLocation; % not a file
+            invalidFile = pwd; % not a file
             this.verifyError(@() ncs_initialize(this.maxSimTime, this.id, this.configStruct, invalidFile), ...
                 expectedErrId);
             
@@ -352,6 +343,50 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
                 expectedErrId);            
         end
         
+        %% testInvalidTranslatorFile
+        function testInvalidTranslatorFile(this)
+            nonExistingFile = [pwd filesep 'test2.mat'];
+            this.assertTrue(exist(nonExistingFile, 'file') == 0);
+            % ensure that file we use later exists
+            this.assertTrue(exist(this.dummyFile, 'file') == 2);  
+            
+            this.configStruct.filterClassName = 'DelayedModeIMMF';
+            this.configStruct.initialEstimate = Gaussian(zeros(this.dimX, 1), eye(this.dimX));
+            
+            expectedErrId = 'ncs_initialize:InvalidTranslatorFile';                     
+                        
+            invalidTranslatorFile = nonExistingFile; % does not exist
+            this.configStruct.translatorFile = invalidTranslatorFile;
+            this.verifyError(@() ncs_initialize(this.maxSimTime, this.id, this.configStruct, this.matFilename), ...
+                expectedErrId);
+                        
+            invalidTranslatorFile = pwd; % not a file
+            this.configStruct.translatorFile = invalidTranslatorFile;
+            this.verifyError(@() ncs_initialize(this.maxSimTime, this.id, this.configStruct, this.matFilename), ...
+                expectedErrId);
+            
+            invalidTranslatorFile = this.dummyFile; % exists, but incorrect extension
+            this.configStruct.translatorFile = invalidTranslatorFile;
+            this.verifyError(@() ncs_initialize(this.maxSimTime, this.id, this.configStruct, this.matFilename), ...
+                expectedErrId);            
+        end
+        
+        %% testInvalidCheckTranslatorFile
+        function testInvalidCheckTranslatorFile(this)
+            % mat file is existing
+            this.assertTrue(exist(this.translatorFilename, 'file') == 2);
+            
+            this.configStruct.filterClassName = 'DelayedModeIMMF';
+            this.configStruct.initialEstimate = Gaussian(zeros(this.dimX, 1), eye(this.dimX));
+            
+            expectedErrId = 'ncs_initialize:CheckTranslatorFile';
+            
+            this.configStruct.translatorFile = this.translatorFilename; % wrong content
+            this.verifyError(@() ncs_initialize(this.maxSimTime, this.id, this.configStruct, this.matFilename), ...
+                expectedErrId);
+        end        
+%%
+%%
         %% test
         function test(this)
             this.configStruct.filterClassName = 'DelayedModeIMMF';
@@ -384,57 +419,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             this.verifyEqual(ncs.plant.dimInput, this.dimU);
             
             this.verifyEqual(ncs.controlSequenceLength, this.controlSeqLength);
-            
-            % finally, check if the cacheinfo file was created
-            [pathStr, configFileName, ~] = fileparts(this.matFilename);
-            expectedFile = [pathStr filesep configFileName '.cacheinfo'];
-            fileInfo = dir(expectedFile);
-            this.verifyNotEmpty(fileInfo);
-            this.verifyGreaterThan(fileInfo.bytes, 0);
-            this.verifyFalse(fileInfo.isdir);
-        end
-        
-        %% testNoCache
-        function testNoCache(this)
-            this.configStruct.filterClassName = 'DelayedModeIMMF';
-            this.configStruct.initialEstimate = Gaussian(zeros(this.dimX, 1), eye(this.dimX));            
-            this.configStruct = rmfield(this.configStruct, 'ignoreControllerCache');
-            
-            this.assertFalse(isfield(this.configStruct, 'ignoreControllerCache'));
-            
-            ncsHandle = ncs_initialize(this.maxSimTime, this.id, this.configStruct, this.matFilename);
-            
-            this.verifyGreaterThan(ncsHandle, 0);
-            ncs = ComponentMap.getInstance().getComponent(ncsHandle);
-            this.verifyClass(ncs, ?NetworkedControlSystem);
-            
-            % check some params of the contructed NCS
-            this.verifyEqual(ncs.networkType, NetworkType.UdpLikeWithAcks);
-            this.verifyEqual(ncs.samplingInterval, this.samplingInterval);
-            this.verifyEqual(ncs.name, this.id);
-            
-            this.verifyClass(ncs.controller, ?NcsControllerWithFilter);
-            this.verifyClass(ncs.controller.controller, ?NominalPredictiveController);
-            this.verifyEqual(ncs.controller.controller.Q, this.Q);
-            this.verifyEqual(ncs.controller.controller.R, this.R);
-            this.verifyEmpty(ncs.controller.controller.setpoint);
-            this.verifyEmpty(ncs.controller.plantStateOrigin);
-            
-            this.verifyClass(ncs.sensor, ?NcsSensor);
-            
-            this.verifyClass(ncs.plant, ?NcsPlant);
-            this.verifyEqual(ncs.plant.dimState, this.dimX);
-            this.verifyEqual(ncs.plant.dimInput, this.dimU);
-            
-            this.verifyEqual(ncs.controlSequenceLength, this.controlSeqLength);
-            
-            % finally, check that the cacheinfo file was indeed not created
-            [pathStr, configFileName, ~] = fileparts(this.matFilename);
-            expectedFile = [pathStr filesep configFileName '.cacheinfo'];
-            fileInfo = dir(expectedFile);
-            this.verifyEmpty(fileInfo);            
-            this.verifyTrue(exist(expectedFile, 'file') == 0);
-        end
+        end        
         
         %% testEventBasedSensor
         function testEventBasedSensor(this)
@@ -532,8 +517,8 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             expectedSysNoiseMatrix = [1 0 0; 0 0 0; 0 0 0]; % G matrix
             plantState = [1 1 1]';
             timestep = 1;
-            caPackets = [];
-            
+            simTimeSec = timestep; % for simplicty 1 time step = 1s
+                        
             % we use a different plant now
             this.configStruct.plant = LinearPlant(this.A, this.B, this.W, expectedSysNoiseMatrix);
             this.configStruct.filterClassName = 'DelayedModeIMMF';
@@ -545,8 +530,8 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             ncs = ComponentMap.getInstance().getComponent(ncsHandle);
 
             % no inputs applied
-            ncs.plant.init(plantState);
-            newPlantState = ncs.plant.plantStep(timestep);
+            ncs.plant.init(plantState, timestep);
+            newPlantState = ncs.plant.plantStep(timestep,simTimeSec);
           
             % check if the state evolved correctly; noise affects only
             % first component
@@ -738,21 +723,23 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
         function testPlantInvertedPendulum(this)
             expectedSamplingInterval = this.samplingInterval / 2;
             expectedPlantSamplingInterval = this.samplingInterval / 2;
-            expectedWcont = eye(4);
+            expectedWcontLin = blkdiag(0.1, 0.5); % noise in the continuous-time linearization
+            expectedPendNoiseCov = gallery('moler', 2); % noise cov (nonlinear pendulum dynamics)
+            
             
             pendulum = InvertedPendulum(1, 1, 1, 0.1, this.samplingInterval);
-            pendulum.W_cont = expectedWcont;
+            pendulum.varDisturbanceForcePendulumContLin = expectedWcontLin(1, 1);
+            pendulum.varDisturbanceForceActuatorContLin = expectedWcontLin(2, 2);
             pendulumCopyNoNoise = InvertedPendulum(1, 1, 1, 0.1, this.samplingInterval);
             
             expectedPlantStateOrigin = [0 0 pi 0]'; % pendulum state is 4-dimensional
             
-            [A_d, B_d, C_d, W_d] = pendulum.linearizeAroundUpwardEquilibrium(); % discrete time matrices
-            [expA, expB, ~] = pendulum.linearizeAroundUpwardEquilibrium(expectedSamplingInterval);
+            [A_d, B_d, C_d, ~] = pendulum.linearizeAroundUpwardEquilibrium(); % discrete time matrices
+            [expA, expB, expC, ~] = pendulum.linearizeAroundUpwardEquilibrium(expectedSamplingInterval);
                                            
             this.configStruct.A = A_d;
             this.configStruct.B = B_d;
-            this.configStruct.C = C_d;
-            this.configStruct.W = W_d;
+            this.configStruct.C = C_d;            
             this.configStruct.V = eye(2); % two-dimensional measurements
             this.configStruct.samplingInterval = expectedSamplingInterval;
             this.configStruct.plantSamplingInterval = expectedPlantSamplingInterval;
@@ -760,13 +747,15 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             this.configStruct.R = 100;
             this.configStruct.linearizationPoint = expectedPlantStateOrigin;
             this.configStruct.plant = pendulumCopyNoNoise;
-            this.configStruct.W_cont = expectedWcont; % inject the noise into the config here
+            this.configStruct.W = expectedWcontLin; % inject the noise into the config here (for the linearization)
+            this.configStruct.W_pend = expectedPendNoiseCov; % for the nonlinear dynamics
             this.configStruct.initialPlantState = zeros(4, 1); % initial pendulum state
             
             this.configStruct.controllerClassName = 'NominalPredictiveController';
             this.configStruct.filterClassName = 'DelayedKF';
             this.configStruct.initialEstimate = Gaussian(zeros(4, 1), eye(4));
             expectedGain = -dlqr(expA, expB, this.configStruct.Q, this.configStruct.R);
+            
             
             ncsHandle = ncs_initialize(this.maxSimTime, this.id, this.configStruct, this.matFilename);
             
@@ -784,23 +773,33 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             this.verifyEqual(ncs.controller.controller.L, expectedGain, 'AbsTol', 1e-8);
             this.verifyEqual(ncs.controlSequenceLength, this.controlSeqLength)
             
+            % check if the filter uses the correct model (linearized dynamics) incl. noise
+            [A_cont, ~, ~, G_cont, ~] = pendulum.linearizeAroundUpwardEquilibriumCont();
+            expectedWdisc = integral(@(x) expm(A_cont*x) * G_cont * expectedWcontLin * G_cont' * expm(A_cont'*x), ...
+                    0, expectedPlantSamplingInterval, 'ArrayValued', true);  
+            this.verifyClass(ncs.controller.plantModel, ?LinearPlant);
+            this.verifyEqual(ncs.controller.plantModel.sysMatrix, expA);
+            this.verifyEqual(ncs.controller.plantModel.inputMatrix, expB);
+            this.verifyClass(ncs.controller.plantModel.noise, ?Gaussian);
+            [filterNoiseMean, filterNoiseCov] = ncs.controller.plantModel.noise.getMeanAndCov();
+            this.verifyEqual(filterNoiseMean, zeros(4,1));
+            this.verifyEqual(filterNoiseCov, expectedWdisc, 'AbsTol', 1e-8);
+            
+            % check the plant (inverted pendulum)
             this.verifyClass(ncs.plant, ?NcsPlant);
             this.verifyClass(ncs.plant.plant, ?InvertedPendulum);
             this.verifyEqual(ncs.plant.plant.samplingInterval, expectedPlantSamplingInterval);
-            this.verifyEqual(ncs.plant.plant.W_cont, expectedWcont); % noise in the continuous-time linearization
-            
-            % by default, plant is simulated with noise
-            [A_cont, ~, ~, ~] = pendulum.linearizeAroundUpwardEquilibriumCont();
-             expectedWdisc = integral(@(x) expm(A_cont*x) * expectedWcont * expm(A_cont'*x), ...
-                    0, expectedPlantSamplingInterval, 'ArrayValued', true);  
-            this.verifyClass(ncs.plant.plant.noise, ?Gaussian);
+            this.verifyEqual(ncs.plant.plant.varDisturbanceForcePendulumContLin, expectedWcontLin(1,1)); % noise affecting pendulum rod in the continuous-time linearization
+            this.verifyEqual(ncs.plant.plant.varDisturbanceForceActuatorContLin, expectedWcontLin(2,2)); % noise affecting cart in the continuous-time linearization
+            % two dimensional noise
+            this.verifyClass(ncs.plant.plant.noise, ?Gaussian);            
             [plantNoiseMean, plantNoiseCov] = ncs.plant.plant.noise.getMeanAndCov();
-            this.verifyEqual(plantNoiseMean, zeros(4, 1));
-            this.verifyEqual(plantNoiseCov, expectedWdisc, 'AbsTol', 1e-8);
+            this.verifyEqual(plantNoiseMean, zeros(2, 1));
+            this.verifyEqual(plantNoiseCov, expectedPendNoiseCov);
             
-            % finally, check the measurement noise assumed by the
-            % controller/filter
+            % finally, check the measurement model assumed by the controller/filter
             this.verifyClass(ncs.controller.measModel, ?LinearMeasurementModel);
+            this.verifyEqual(ncs.controller.measModel.measMatrix, expC);
             this.verifyClass(ncs.controller.measModel.noise, ?Gaussian);
             [measNoiseMean, measNoiseCov] = ncs.controller.measModel.noise.getMeanAndCov();
             this.verifyEqual(measNoiseMean, zeros(2, 1));
@@ -811,21 +810,22 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
         function testPlantInvertedPendulumNoProcessNoise(this)
             expectedSamplingInterval = this.samplingInterval / 2;
             expectedPlantSamplingInterval = this.samplingInterval / 2;
-            expectedWcont = eye(4);
+            expectedWcontLin = blkdiag(0.1, 0.5); % noise in the continuous-time linearization
+                       
             
             pendulum = InvertedPendulum(1, 1, 1, 0.1, this.samplingInterval);
-            pendulum.W_cont = expectedWcont;
+            pendulum.varDisturbanceForcePendulumContLin = expectedWcontLin(1, 1);
+            pendulum.varDisturbanceForceActuatorContLin = expectedWcontLin(2, 2);
             pendulumCopyNoNoise = InvertedPendulum(1, 1, 1, 0.1, this.samplingInterval);
             
             expectedPlantStateOrigin = [0 0 pi 0]'; % pendulum state is 4-dimensional
             
-            [A_d, B_d, C_d, W_d] = pendulum.linearizeAroundUpwardEquilibrium(); % discrete time matrices
-            [expA, expB, ~] = pendulum.linearizeAroundUpwardEquilibrium(expectedSamplingInterval);
+            [A_d, B_d, C_d, ~] = pendulum.linearizeAroundUpwardEquilibrium(); % discrete time matrices
+            [expA, expB, expC, ~] = pendulum.linearizeAroundUpwardEquilibrium(expectedSamplingInterval);
                                            
             this.configStruct.A = A_d;
             this.configStruct.B = B_d;
-            this.configStruct.C = C_d;
-            this.configStruct.W = W_d;
+            this.configStruct.C = C_d;            
             this.configStruct.V = eye(2); % two-dimensional measurements
             this.configStruct.samplingInterval = expectedSamplingInterval;
             this.configStruct.plantSamplingInterval = expectedPlantSamplingInterval;
@@ -833,15 +833,14 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             this.configStruct.R = 100;
             this.configStruct.linearizationPoint = expectedPlantStateOrigin;
             this.configStruct.plant = pendulumCopyNoNoise;
-            this.configStruct.W_cont = expectedWcont; % inject the noise into the config here
+            this.configStruct.W = expectedWcontLin; % inject the noise into the config here (for the linearization)
+            this.configStruct.usePlantNoise = false; % plant to be simulated withut noise
             this.configStruct.initialPlantState = zeros(4, 1); % initial pendulum state
-            %the pendulum shall be simulated without process noise
-            this.configStruct.usePlantNoise = false;
             
             this.configStruct.controllerClassName = 'NominalPredictiveController';
             this.configStruct.filterClassName = 'DelayedKF';
             this.configStruct.initialEstimate = Gaussian(zeros(4, 1), eye(4));
-            expectedGain = -dlqr(expA, expB, this.configStruct.Q, this.configStruct.R);
+            expectedGain = -dlqr(expA, expB, this.configStruct.Q, this.configStruct.R);            
             
             ncsHandle = ncs_initialize(this.maxSimTime, this.id, this.configStruct, this.matFilename);
             
@@ -859,32 +858,110 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             this.verifyEqual(ncs.controller.controller.L, expectedGain, 'AbsTol', 1e-8);
             this.verifyEqual(ncs.controlSequenceLength, this.controlSeqLength)
             
+            % check if the filter uses the correct model (linearized dynamics) incl. noise
+            [A_cont, ~, ~, G_cont, ~] = pendulum.linearizeAroundUpwardEquilibriumCont();
+            expectedWdisc = integral(@(x) expm(A_cont*x) * G_cont * expectedWcontLin * G_cont' * expm(A_cont'*x), ...
+                    0, expectedPlantSamplingInterval, 'ArrayValued', true);  
+            this.verifyClass(ncs.controller.plantModel, ?LinearPlant);
+            this.verifyEqual(ncs.controller.plantModel.sysMatrix, expA);
+            this.verifyEqual(ncs.controller.plantModel.inputMatrix, expB);
+            this.verifyClass(ncs.controller.plantModel.noise, ?Gaussian);
+            [filterNoiseMean, filterNoiseCov] = ncs.controller.plantModel.noise.getMeanAndCov();
+            this.verifyEqual(filterNoiseMean, zeros(4,1));
+            this.verifyEqual(filterNoiseCov, expectedWdisc, 'AbsTol', 1e-8);
+            
+            % plant is simulated without noise
             this.verifyClass(ncs.plant, ?NcsPlant);
             this.verifyClass(ncs.plant.plant, ?InvertedPendulum);
             this.verifyEqual(ncs.plant.plant.samplingInterval, expectedPlantSamplingInterval);
-            this.verifyEqual(ncs.plant.plant.W_cont, expectedWcont); % noise in the continuous-time linearization
-            
-            % the plant shall be simulated with noise, but the filter uses
-            % noise
-            [A_cont, ~, ~, ~] = pendulum.linearizeAroundUpwardEquilibriumCont();
-            expectedWFilter = integral(@(x) expm(A_cont*x) * expectedWcont * expm(A_cont'*x), ...
-                    0, expectedSamplingInterval, 'ArrayValued', true);
-            
             this.verifyEmpty(ncs.plant.plant.noise);
-            
-            this.verifyClass(ncs.controller.plantModel, ?DelayedKFSystemModel);
-            this.verifyClass(ncs.controller.plantModel.noise, ?Gaussian);
-            [filterNoiseMean, filterNoiseCov] = ncs.controller.plantModel.noise.getMeanAndCov();
-            this.verifyEqual(filterNoiseMean, zeros(4, 1));
-            this.verifyEqual(filterNoiseCov, expectedWFilter, 'AbsTol', 1e-8);
-            
-            % finally, check the measurement noise assumed by the
-            % controller/filter
+            % buth the linearization has noise
+            this.verifyEqual(ncs.plant.plant.varDisturbanceForcePendulumContLin, expectedWcontLin(1,1)); % noise affecting pendulum rod in the continuous-time linearization
+            this.verifyEqual(ncs.plant.plant.varDisturbanceForceActuatorContLin, expectedWcontLin(2,2)); % noise affecting cart in the continuous-time linearization            
+                        
+            % finally, check the measurement model assumed by the controller/filter
             this.verifyClass(ncs.controller.measModel, ?LinearMeasurementModel);
+            this.verifyEqual(ncs.controller.measModel.measMatrix, expC);
             this.verifyClass(ncs.controller.measModel.noise, ?Gaussian);
             [measNoiseMean, measNoiseCov] = ncs.controller.measModel.noise.getMeanAndCov();
             this.verifyEqual(measNoiseMean, zeros(2, 1));
             this.verifyEqual(measNoiseCov, this.configStruct.V);
+        end
+        
+        %% testNcsTranslatorFromFile
+        function testNcsTranslatorFromFile(this)        
+            % mat file is existing
+            this.assertTrue(exist(this.translatorFilename, 'file') == 2);
+            
+            targetQoc = 0.75;
+            expectedDataRate = targetQoc ^ 2 + 2 * targetQoc + 3;
+            expectedRateChange = 2 * targetQoc + 2; % derivate of qocRateCurve w.r.t. targetQoc
+            
+            this.configStruct.filterClassName = 'DelayedModeIMMF';
+            this.configStruct.initialEstimate = Gaussian(zeros(this.dimX, 1), eye(this.dimX));
+                        
+            translatorFile = matfile(this.translatorFilename, 'Writable', true);
+            translatorFile.translator = this.ncsTranslator;
+            this.configStruct.translatorFile = this.translatorFilename;
+            
+            ncsHandle = ncs_initialize(this.maxSimTime, this.id, this.configStruct, this.matFilename);
+            
+            ncs = ComponentMap.getInstance().getComponent(ncsHandle);                        
+            % check is translator is working properly
+            [actualDataRate, actualRateChange] = ncs.evaluateRateQualityCharacteristics(targetQoc);
+            this.verifyEqual(actualDataRate, expectedDataRate, 'AbsTol', 1e-10);
+            this.verifyEqual(actualRateChange, expectedRateChange, 'AbsTol', 1e-10);
+        end
+        
+        %% testNcsTranslatorFromConfig
+        function testNcsTranslatorFromConfig(this)            
+            targetQoc = 0.75;
+            expectedDataRate = targetQoc ^ 2 + 2 * targetQoc + 3;
+            expectedRateChange = 2 * targetQoc + 2; % derivate of qocRateCurve w.r.t. targetQoc
+            
+            this.configStruct.filterClassName = 'DelayedModeIMMF';
+            this.configStruct.initialEstimate = Gaussian(zeros(this.dimX, 1), eye(this.dimX));
+                        
+            this.configStruct.translator = this.ncsTranslator;
+            
+            ncsHandle = ncs_initialize(this.maxSimTime, this.id, this.configStruct, this.matFilename);
+            
+            ncs = ComponentMap.getInstance().getComponent(ncsHandle);                        
+            % check is translator is working properly
+            [actualDataRate, actualRateChange] = ncs.evaluateRateQualityCharacteristics(targetQoc);
+            this.verifyEqual(actualDataRate, expectedDataRate, 'AbsTol', 1e-10);
+            this.verifyEqual(actualRateChange, expectedRateChange, 'AbsTol', 1e-10);
+        end
+        
+        %% testNcsTranslatorFromBoth
+        function testNcsTranslatorFromBoth(this)
+            % mat file is existing
+            this.assertTrue(exist(this.translatorFilename, 'file') == 2);
+            
+            qocRateCurve = cfit(fittype('a*x^2+b*x+c'), 7, 2, 4);
+            controlErrorQocCurve = cfit(fittype('-a*x+2'), 0.75); % for simplicity, use linear function
+            maxDataRate = 55;
+            secondTranslator = NcsTranslator(qocRateCurve, controlErrorQocCurve, maxDataRate);
+            
+            targetQoc = 0.75;
+            expectedDataRate = targetQoc ^ 2 + 2 * targetQoc + 3;
+            expectedRateChange = 2 * targetQoc + 2; % derivate of qocRateCurve w.r.t. targetQoc
+            
+            this.configStruct.filterClassName = 'DelayedModeIMMF';
+            this.configStruct.initialEstimate = Gaussian(zeros(this.dimX, 1), eye(this.dimX));
+                        
+            this.configStruct.translator = secondTranslator;
+            translatorFile = matfile(this.translatorFilename, 'Writable', true);
+            translatorFile.translator = this.ncsTranslator;
+            this.configStruct.translatorFile = this.translatorFilename; % this one should be chosen
+            
+            ncsHandle = ncs_initialize(this.maxSimTime, this.id, this.configStruct, this.matFilename);
+            
+            ncs = ComponentMap.getInstance().getComponent(ncsHandle);                        
+            % check is translator is working properly
+            [actualDataRate, actualRateChange] = ncs.evaluateRateQualityCharacteristics(targetQoc);
+            this.verifyEqual(actualDataRate, expectedDataRate, 'AbsTol', 1e-10);
+            this.verifyEqual(actualRateChange, expectedRateChange, 'AbsTol', 1e-10);
         end
     end
 end

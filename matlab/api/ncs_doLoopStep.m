@@ -1,4 +1,4 @@
-function [pktsOut, qocOut, stats] = ncs_doLoopStep(handle, timestamp, paramStruct)
+function [pktsOut, qocOut, stats, controllerStateAdmissible] = ncs_doLoopStep(handle, timestamp, paramStruct)
     % Perform a control loop (NCS) cycle in Matlab. 
     %
     % Parameters:
@@ -26,6 +26,10 @@ function [pktsOut, qocOut, stats] = ncs_doLoopStep(handle, timestamp, paramStruc
     %        supported by the employed controller
     %      - caDelayProbs (Nonnegative vector): the new true (or assumed) distribution of the delays in the
     %        network between controller and actuator (i.e., for control sequences);
+    %        ignored, if adapting this distribution at runtime is not
+    %        supported by the employed controller
+    %      - scDelayProbs (Nonnegative vector): the new true (or assumed) distribution of the delays in the
+    %        network between sensor and controller (i.e., for measurements);
     %        ignored, if adapting this distribution at runtime is not
     %        supported by the employed controller
     %
@@ -61,6 +65,23 @@ function [pktsOut, qocOut, stats] = ncs_doLoopStep(handle, timestamp, paramStruc
     %        packet (i.e., a control sequence) was sent out by the controller or not
     %      - ac_sent (Logical, i.e., a flag), indicating whether a
     %        packet (i.e., an ACK) was sent out by the actuator or not
+    %
+    %   << controllerStateAdmissible (Logical Scalar, i.e. a Flag)
+    %      A flag to indicate whether the current controller state is
+    %      admissible, i.e. no error has occurred during computation of
+    %      fresh input sequences.
+    %
+    % Literature: 
+    %  	Florian Rosenthal, Markus Jung, Martina Zitterbart, and Uwe D. Hanebeck,
+    %   CoCPN - Towards Flexible and Adaptive Cyber-Physical Systems Through Cooperation,
+    %   Proceedings of the 2019 16th IEEE Annual Consumer Communications & Networking Conference,
+    %   Las Vegas, Nevada, USA, January 2019.
+    %      
+    %   Markus Jung, Florian Rosenthal, and Martina Zitterbart,
+    %   CoCPN-Sim: An Integrated Simulation Environment for Cyber-Physical Systems,
+    %   Proceedings of the 2018 IEEE/ACM Third International Conference on Internet-of-Things Design and Implementation (IoTDI), 
+    %   Orlando, FL, USA, April 2018.
+    
     
     %    This program is free software: you can redistribute it and/or modify
     %    it under the terms of the GNU General Public License as published by
@@ -75,19 +96,13 @@ function [pktsOut, qocOut, stats] = ncs_doLoopStep(handle, timestamp, paramStruc
     %    You should have received a copy of the GNU General Public License
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
     
-    ncs = GetNcsByHandle(handle); % crashes if handle is invalid
-    assert(Checks.isPosScalar(timestamp) && mod(timestamp, 1) == 0, ...
-        'ncs_doLoopStep:InvalidTimestamp', ...
-        '** <timestamp> expected to be positive integer **');
-    
-    if nargin < 3
-        paramStruct = struct([]);
-    else
-        assert(isempty(paramStruct) || (isstruct(paramStruct) && isscalar(paramStruct)), ...
-            'ncs_doLoopStep:InvalidParamStruct', ...
-            '** If <paramStruct> is present, it must be a single struct (might be empty, though) **'); 
+    arguments
+        handle
+        timestamp(1,1) double {mustBePositive, mustBeInteger} % ensure that timestamp is internally treated as double
+        paramStruct {validateParamStruct} = struct([]) % default, empty struct, validation function below
     end
-    
+    ncs = GetNcsByHandle(handle); % crashes if handle is invalid
+      
     caPackets = [];
     scPackets = [];
     acPackets = [];
@@ -135,10 +150,13 @@ function [pktsOut, qocOut, stats] = ncs_doLoopStep(handle, timestamp, paramStruc
     if isfield(paramStruct, 'caDelayProbs')
         ncs.changeControllerCaDelayProbs(paramStruct.caDelayProbs);
     end
+    if isfield(paramStruct, 'scDelayProbs')
+        ncs.changeControllerScDelayProbs(paramStruct.scDelayProbs);
+    end
 %     if isfield(paramStruct, 'controlSequenceLength') 
 %         ncs.changeControllerSequenceLength(double(paramStruct.controlSequenceLength));
 %     end
-    
+   
     [controllerActuatorPacket, sensorControllerPacket, controllerAcks] ...
         = ncs.step(double(timestamp), scPackets, caPackets, acPackets);
 
@@ -161,6 +179,8 @@ function [pktsOut, qocOut, stats] = ncs_doLoopStep(handle, timestamp, paramStruc
     % get the QoC, as perceived by the controller, to be used by the
     % congestion control
     [~, qocOut] = ncs.getCurrentQualityOfControl();
+    
+    controllerStateAdmissible = ncs.isControllerStateAdmissible();
 end
 
 %% constructPacketsToSend
@@ -185,4 +205,11 @@ function issueErrorInvalidDestinationAddress(destinationAddress, sourceAddress)
         '** Unsupported destination address encountered (%d) for source address (%d) **', ...
         destinationAddress, sourceAddress); 
 
+end
+
+%% validateParamStruct
+function validateParamStruct(paramStruct)
+    assert(isempty(paramStruct) || (isstruct(paramStruct) && isscalar(paramStruct)), ...
+        'ncs_doLoopStep:InvalidParamStruct', ...
+        '** If <paramStruct> is present, it must be a single struct (might be empty, though) **'); 
 end

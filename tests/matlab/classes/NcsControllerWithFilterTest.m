@@ -7,7 +7,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2018-2020  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2018-2021  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -82,8 +82,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             
             this.filterSensorModel = LinearMeasurementModel(this.C);
             this.filterSensorModel.setNoise(Gaussian(zeros(this.dimY, 1), this.V));
-            this.filterPlantModel = DelayedKFSystemModel(this.A, this.B, Gaussian(zeros(this.dimX, 1), this.W), ...
-                this.controlSeqLength + 1, this.maxMeasDelay, this.delayWeights);
+            this.filterPlantModel = LinearPlant(this.A, this.B, this.W);
             
             this.controller = NominalPredictiveController(this.A, this.B, this.Q, this.R, this.controlSeqLength);
             this.filter = DelayedKF(this.maxMeasDelay, eye(this.controlSeqLength + 1));
@@ -114,7 +113,8 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             this.verifySameHandle(ncsController.filter, this.filter);
             this.verifySameHandle(ncsController.plantModel, this.filterPlantModel);
             this.verifySameHandle(ncsController.measModel, this.filterSensorModel);
-                        
+            
+            this.verifyTrue(ncsController.isControllerStateAdmissible());                        
         end
         
         %% testStepNoMode
@@ -151,13 +151,24 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             
             ncsController = NcsControllerWithFilter(this.controller, this.filter, ...
                 this.filterPlantModel, this.filterSensorModel, this.defaultInput, this.initialCaDelayDistribution);
-                        
+            ncsController.initStatisticsRecording();
+            
             acPackets = [];
             scPackets = [];
-            timestep = 1; % initial timestep
             previousMode = 1;
             
-            dataPacket = ncsController.step(timestep, scPackets, acPackets, previousMode);
+            % 1 time step = 1 second
+            % perform 20 steps, without measurement and acks, so that
+            % statistics are recorded properly
+            for j=1:20
+                ncsController.step(j, scPackets, acPackets, previousMode, j);
+            end
+
+            % reset the state to zero            
+            this.filter.setState(controllerState)
+                        
+            timestep = 21;                         
+            dataPacket = ncsController.step(timestep, scPackets, acPackets, previousMode, timestep);
             
             [numUsedMeas, numDiscardedMeas, actualControllerState] = ncsController.getStatisticsForTimestep(timestep);
                         
@@ -170,38 +181,51 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             this.verifySize(inputSequence, [this.dimU this.controlSeqLength]);
             % sanity check for control sequence: controller is linear, prediction is noise-free and
             % state is zero, so inputs should be zero
-            this.verifyEqual(inputSequence, zeros(this.dimU, this.controlSeqLength));
+            this.verifyEqual(inputSequence, zeros(this.dimU, this.controlSeqLength), 'AbsTol', 1e-5);
             this.verifyEqual(dataPacket.sourceAddress, 2);
             this.verifyEqual(dataPacket.destinationAddress, 1);
             this.verifyEqual(dataPacket.timeStamp, timestep);
             
-            this.verifyEqual(actualControllerState, plantState);
+            this.verifyEqual(actualControllerState, plantState, 'AbsTol', 1e-5);
             this.verifyEqual(numUsedMeas, 0);
             this.verifyEqual(numDiscardedMeas, 0);
         end
         
         %% testStepZeroStateMeasDiscarded
-        function testStepZeroStateMeasDiscarded(this)              
-            timestep = 21;
+        function testStepZeroStateMeasDiscarded(this)                          
             plantState = zeros(this.dimX, 1);
             controllerState = Gaussian(plantState, eye(this.dimX));
             this.filter.setState(controllerState);
             
             ncsController = NcsControllerWithFilter(this.controller, this.filter, ...
                 this.filterPlantModel, this.filterSensorModel, this.defaultInput, this.initialCaDelayDistribution);
+            ncsController.initStatisticsRecording();
             
+            acPackets = [];
+            scPackets = [];
+            previousMode = 1;
+            
+            % 1 time step = 1 second
+            % perform 20 steps, without measurement and acks, so that
+            % statistics are recorded properly
+            for j=1:20
+                ncsController.step(j, scPackets, acPackets, previousMode, j);
+            end
+
+            % reset the state to zero            
+            this.filter.setState(controllerState)
+            
+            timestep = 21;
             % assume a measurement that is too old
             measurement = 2 + zeros(this.dimY, 1);
             measTime = timestep - this.maxMeasDelay -1;
             measDelay = timestep - measTime;
             this.assertGreaterThan(measDelay, this.maxMeasDelay);
             
-            acPackets = [];
             scPackets = DataPacket(measurement, measTime);
             scPackets.packetDelay = measDelay;
-            previousMode = 1;
-            
-            dataPacket = ncsController.step(timestep, scPackets, acPackets, previousMode);
+                        
+            dataPacket = ncsController.step(timestep, scPackets, acPackets, previousMode, timestep);
             
             [numUsedMeas, numDiscardedMeas, actualControllerState] = ncsController.getStatisticsForTimestep(timestep);
             
@@ -227,26 +251,39 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
         
         %% testStepZeroStateMeasUsed
         function testStepZeroStateMeasUsed(this)
-            timestep = 21;
-            previousMode = 1;
             plantState = zeros(this.dimX, 1);
             controllerState = Gaussian(plantState, eye(this.dimX));
             this.filter.setState(controllerState);
             
             ncsController = NcsControllerWithFilter(this.controller, this.filter, ...
                 this.filterPlantModel, this.filterSensorModel, this.defaultInput, this.initialCaDelayDistribution);
+            ncsController.initStatisticsRecording();
             
+            acPackets = [];
+            scPackets = [];
+            previousMode = 1;
+            
+            % 1 time step = 1 second
+            % perform 20 steps, without measurement and acks, so that
+            % statistics are recorded properly
+            for j=1:20
+                ncsController.step(j, scPackets, acPackets, previousMode, j);
+            end
+
+            % reset the state to zero            
+            this.filter.setState(controllerState)
+            
+            timestep = 21;
             % assume a measurement that is still applicable
             measurement = 2 + zeros(this.dimY, 1);
             measTime = timestep - this.maxMeasDelay;
             measDelay = timestep - measTime;
             this.assertEqual(measDelay, this.maxMeasDelay);
-            
-            acPackets = [];
+                        
             scPackets = DataPacket(measurement, measTime);
             scPackets.packetDelay = measDelay;
 
-            dataPacket = ncsController.step(timestep, scPackets, acPackets, previousMode);
+            dataPacket = ncsController.step(timestep, scPackets, acPackets, previousMode, timestep);
             
             [numUsedMeas, numDiscardedMeas, actualControllerState] = ncsController.getStatisticsForTimestep(timestep);
                         
@@ -299,8 +336,11 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             this.verifyError(@() ncsController.changeCaDelayProbs(invalidDistribution), expectedErrId);
         end
         
-        %% testChangeCaDelayDistribution
-        function testChangeCaDelayDistribution(this)
+        %% testChangeCaDelayProbsTrue
+        function testChangeCaDelayProbsTrue(this)
+            mixinClass = ?CaDelayProbsChangeable;           
+            this.assertFalse(ismember(mixinClass.Name, superclasses(this.controller)));
+            
             % the controller does not use the delay probs, but the filter
             % (DelayedKF) does, so it should be possible to change the
             % distribution of the delays
@@ -309,7 +349,10 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             
             newDelayProbs = [this.delayWeights(1:end-1); this.delayWeights(end) / 2; this.delayWeights(end) / 2];            
             this.verifyTrue(ncsController.changeCaDelayProbs(newDelayProbs));
-            
+        end
+        
+        %% testChangeCaDelayProbsFalse
+        function testChangeCaDelayProbsFalse(this)
             % now use a controller that does not support this
             % initially, provide the controller with a mode transition
             % matrix
@@ -321,8 +364,61 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             ncsController = NcsControllerWithFilter(newController, this.filter, ...
                 this.filterPlantModel, this.filterSensorModel, this.defaultInput, this.initialCaDelayDistribution);
             
-            this.verifyFalse(ncsController.changeCaDelayProbs(newDelayProbs));
+            mixinClass = ?CaDelayProbsChangeable;           
+            this.assertFalse(ismember(mixinClass.Name, superclasses(newController)));
             
+            
+            newDelayProbs = [this.delayWeights(1:end-1); this.delayWeights(end) / 2; this.delayWeights(end) / 2]; 
+            this.verifyFalse(ncsController.changeCaDelayProbs(newDelayProbs));            
+        end
+%%
+%%
+         %% testChangeModelParametersFalse
+        function testChangeModelParametersFalse(this)
+            modeTransitionMatrix = Utility.calculateDelayTransitionMatrix(...
+                Utility.truncateDiscreteProbabilityDistribution(this.initialCaDelayDistribution, this.controlSeqLength + 1));
+            newController = FiniteHorizonController(this.A, this.B, this.Q, this.R, ...
+                modeTransitionMatrix, this.controlSeqLength, 1);
+            
+            mixinClass = ?ModelParamsChangeable;
+            this.assertFalse(ismember(mixinClass.Name, superclasses(newController)));
+            this.assertEqual(full(this.filterPlantModel.sysMatrix(1:this.dimX, 1:this.dimX)), this.A);
+            
+            newA = this.A * 2;
+            newB = this.B * 2;
+            newW = this.W * 2;
+            
+            ncsController = NcsControllerWithFilter(newController, this.filter, ...
+                this.filterPlantModel, this.filterSensorModel, this.defaultInput, this.initialCaDelayDistribution);
+            
+            this.verifyFalse(ncsController.changeModelParameters(newA, newB, newW));
+            % no effect at all
+            this.verifyEqual(full(this.filterPlantModel.sysMatrix(1:this.dimX, 1:this.dimX)), this.A);
+        end
+        
+        %% testChangeModelParametersTrue
+        function testChangeModelParametersTrue(this)
+            mixinClass = ?ModelParamsChangeable;           
+            
+            this.assertTrue(ismember(mixinClass.Name, superclasses(this.controller)));
+            this.assertEqual(full(this.filterPlantModel.sysMatrix(1:this.dimX, 1:this.dimX)), this.A);
+            
+            newA = this.A * 2;
+            newB = this.B * 2;
+            newW = this.W * 2;
+            
+            ncsController = NcsControllerWithFilter(this.controller, this.filter, ...
+                this.filterPlantModel, this.filterSensorModel, this.defaultInput, this.initialCaDelayDistribution);
+            
+            this.verifyTrue(ncsController.changeModelParameters(newA, newB, newW));
+            
+            noise = this.filterPlantModel.noise;
+            [noiseMean, noiseCov] = noise.getMeanAndCov();
+            % check the side effect
+            this.verifyEqual(full(this.filterPlantModel.sysMatrix(1:this.dimX, 1:this.dimX)), newA);
+            this.verifyClass(noise, ?Gaussian);
+            this.verifyEqual(noiseMean, zeros(this.dimX, 1));
+            this.verifyEqual(noiseCov, newW);
         end
     end
 end

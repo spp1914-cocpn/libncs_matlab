@@ -7,7 +7,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2018-2020  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2018-2021  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -67,8 +67,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             sensorSubsystem = NcsSensor(sensor);
             
             filter = DelayedKF(maxMeasDelay, eye(3));
-            filterPlantModel = DelayedKFSystemModel(A, B, Gaussian(zeros(dimX, 1), W), ...
-                controlSeqLength + 1, maxMeasDelay, [1/3 1/3 1/3]);
+            filterPlantModel = LinearPlant(A, B, W);
             
             actuator = BufferingActuator(controlSeqLength, zeros(dimU, 1));
             plantSubsystem = NcsPlant(plant, actuator);

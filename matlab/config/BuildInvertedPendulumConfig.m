@@ -28,7 +28,7 @@ function config = BuildInvertedPendulumConfig(samplingInterval, massCart, massPe
     %      A positive scalar denoting the length of the pendulum rod (in m).
     %      If left out, 0.3 m is used as default value.
     %
-    %   >> initialPlantState (4-dimensional Vector or Distribution)
+    %   >> initialPlantState (4-dimensional Vector or Distribution, optional)
     %      A 4-dimensional vector or a probability distribution denoting
     %      the initial integrator state, i.e., initial position and
     %      velocity of the cart, the initial deviation of the pendulum from the upward equalibrium and its 
@@ -37,16 +37,16 @@ function config = BuildInvertedPendulumConfig(samplingInterval, massCart, massPe
     %      randomly drawn according to the given probability law.
     %      If left out, [0 0 pi+0.02 0]' is used as the initial plant state.
     %       
-    %   >> plantNoiseCov (Positive definite matrix)
-    %      A positive definite 4-by-4 matrix, the covariance matrix of the
-    %      zero-mean Gaussian process noise used for the plant model and its linearization.
-    %      If left out, a diagonal covariance matrix with [0.0001; 0; 0.0001; 0] is assumed 
-    %      for the continuous-time model and then discretized.
+    %   >> plantNoiseCov (Positive definite matrix, optional)
+    %      A positive definite 2-by-2 matrix, typically diagonal, the covariance matrix of the
+    %      zero-mean Gaussian process noise (disturbance force acting on tip of pendulum rod and on cart, respectively)
+    %      used for the nonlinear plant model and its linearization.
+    %      If left out, a diagonal covariance matrix with 0.0001 * eye(2) is assumed.
     %
-    %   >> measNoiseCov (Positive definite matrix)
+    %   >> measNoiseCov (Positive definite matrix, optional)
     %      A definite 2-by-2 matrix specifying the covarariance of the zero-mean Gaussian measurement noise that corrupts
     %      measurements taken at every time step.
-    %      If left out, 0.001^2 * eye(2) is used as default value. 
+    %      If left out, 0.0001 * eye(2) is used as default value.
     %
     % Returns:
     %   >> config (Struct)
@@ -57,7 +57,7 @@ function config = BuildInvertedPendulumConfig(samplingInterval, massCart, massPe
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2018-2020  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2018-2021  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -82,33 +82,27 @@ function config = BuildInvertedPendulumConfig(samplingInterval, massCart, massPe
     % pendulum from equilibrium and angular velocity
     % measurement: position of cart and angle of pendulum
     % control input: force applied to the cart
-    if nargin == 1
-        massCart = 0.5; % mass of cart
-        massPendulum = 0.2; % mass of pendulum
-        friction = 0.1; % friction of the cart
     
-        length = 0.3; % length of pendulum
-        %samplingInterval = 0.01; % 100Hz
-        %samplingInterval = 0.001; % 1kHz
+    arguments
+        samplingInterval (1,1) double {mustBePositive, mustBeFinite}
+        massCart (1,1) double {mustBePositive, mustBeFinite} = 0.5; % mass of cart
+        massPendulum (1,1) double {mustBePositive, mustBeFinite} = 0.2; % mass of pendulum
+        friction (1,1) double {mustBePositive, mustBeFinite} = 0.1; % friction of the cart
+        length (1,1) double {mustBePositive, mustBeFinite} = 0.3; % length of pendulum
         initialPlantState = [0; 0; pi+0.02; 0];
-
-        measNoiseCov = 0.001^2 * eye(2);
-        sigmaPos = 0.001; % standard deviation of position
-        sigmaDev = 0.001; % standard deviation of angle (deviation from equlibrium)
-        % noise of the continuous-time model
-        plantNoiseCov = diag([sigmaPos 0 sigmaDev 0]) .^ 2;        
-    elseif nargin ~= 8
-        error('BuildInvertedPendulumConfig:InvalidNumberOfArgs', ...
-            '** Invalid number of optional arguments (%d). Either pass none or all. **', nargin-1);
+        plantNoiseCov (2,2) double {chol(plantNoiseCov)} = diag([1e-4, 1e-4]);
+        measNoiseCov (2,2) double {chol(measNoiseCov)} = 0.001^2 * eye(2);
     end
     
     config.plant = InvertedPendulum(massCart, massPendulum, length, friction, samplingInterval);
-    config.plant.W_cont = plantNoiseCov;
-    [config.A, config.B, config.C, config.W] = config.plant.linearizeAroundUpwardEquilibrium(samplingInterval);
-
-    % use discrete-time noise also for the nonlinear plant dynamics
-    config.plant.setNoise(Gaussian(zeros(4, 1), config.W));
-  
+    config.W_pend = plantNoiseCov;
+    % data for the linearization
+    [config.A, config.B, config.C, ~] = config.plant.linearizeAroundUpwardEquilibrium(samplingInterval);
+    config.W = plantNoiseCov; % use the noise also for the linearized dynamics, processed inside initPlant() in ncs_initialize
+    
+    % use discrete-time noise for the nonlinear plant dynamics
+    config.plant.setNoise(Gaussian(zeros(2, 1), plantNoiseCov));
+    
     config.V = measNoiseCov;
     % we want to measure the deviation of the angle from equilibrium, but measure the angle
     % so add pi to the meas model used by the filter
@@ -120,7 +114,7 @@ function config = BuildInvertedPendulumConfig(samplingInterval, massCart, massPe
     config.linearizationPoint = [0 0 pi 0]';
     config.samplingInterval = samplingInterval;
     config.initialPlantState = initialPlantState;
-    config.W_cont = plantNoiseCov;
+
 %     Q = diag([100 0 5000 0]); % state weighting matrix for LQR, small angle deviations are crucial
 %     R = 100; % input weighting matrix for LQR
 %     % this combination allows for larger inputs

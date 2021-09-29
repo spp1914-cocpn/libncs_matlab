@@ -16,7 +16,18 @@ function pktsOut = ncs_doHandlePacket(handle, timestamp, pktIn)
     %   << pktsOut (Cell array, column-vector like, of DataPackets, currently empty)
     %      The DataPackets resulting from the reception of the given packet
     %      sent (e.g., acknowledgments), row-wise arranged in a cell array
-
+    %
+    % Literature: 
+    %  	Florian Rosenthal, Markus Jung, Martina Zitterbart, and Uwe D. Hanebeck,
+    %   CoCPN - Towards Flexible and Adaptive Cyber-Physical Systems Through Cooperation,
+    %   Proceedings of the 2019 16th IEEE Annual Consumer Communications & Networking Conference,
+    %   Las Vegas, Nevada, USA, January 2019.
+    %      
+    %   Markus Jung, Florian Rosenthal, and Martina Zitterbart,
+    %   CoCPN-Sim: An Integrated Simulation Environment for Cyber-Physical Systems,
+    %   Proceedings of the 2018 IEEE/ACM Third International Conference on Internet-of-Things Design and Implementation (IoTDI), 
+    %   Orlando, FL, USA, April 2018.
+    
     %    This program is free software: you can redistribute it and/or modify
     %    it under the terms of the GNU General Public License as published by
     %    the Free Software Foundation, either version 3 of the License, or

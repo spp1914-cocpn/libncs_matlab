@@ -20,6 +20,9 @@ function [costs, controllerStats, plantStats] = ncs_finalize(ncsHandle)
     %     containing the plant states kept by the controller per time step
     %     -numDiscardedControlSequences (Row vector of nonnegative integers), indicating the number
     %     of received control sequences that have been discarded by the actuator at each time step
+    %     -controllerTimes (Row vector of nonnegative scalars), the i-th
+    %     entry indicates the simulation time (in seconds) corresponding to
+    %     the i-th controller time step
     %
     %   << plantStats (Struct)
     %     Struct containing plant-related data gathered during the execution
@@ -30,7 +33,18 @@ function [costs, controllerStats, plantStats] = ncs_finalize(ncsHandle)
     %     -trueStates (Matrix), 
     %     containing the true plant states per time step (time step w.r.t
     %     plant sampling rate)  
-    
+    %    
+    % Literature: 
+    %  	Florian Rosenthal, Markus Jung, Martina Zitterbart, and Uwe D. Hanebeck,
+    %   CoCPN - Towards Flexible and Adaptive Cyber-Physical Systems Through Cooperation,
+    %   Proceedings of the 2019 16th IEEE Annual Consumer Communications & Networking Conference,
+    %   Las Vegas, Nevada, USA, January 2019.
+    %      
+    %   Markus Jung, Florian Rosenthal, and Martina Zitterbart,
+    %   CoCPN-Sim: An Integrated Simulation Environment for Cyber-Physical Systems,
+    %   Proceedings of the 2018 IEEE/ACM Third International Conference on Internet-of-Things Design and Implementation (IoTDI), 
+    %   Orlando, FL, USA, April 2018.
+        
     %    This program is free software: you can redistribute it and/or modify
     %    it under the terms of the GNU General Public License as published by
     %    the Free Software Foundation, either version 3 of the License, or
@@ -52,6 +66,7 @@ function [costs, controllerStats, plantStats] = ncs_finalize(ncsHandle)
     controllerStats.numDiscardedMeasurements = ncsStats.numDiscardedMeasurements;
     controllerStats.numDiscardedControlSequences = ncsStats.numDiscardedControlSequences;        
     controllerStats.controllerStates = ncsStats.controllerStates;
+    controllerStats.controllerTimes = ncsStats.times'; % transpose into row vector
     
     plantStats.trueStates = ncsStats.trueStates;
     plantStats.appliedInputs = ncsStats.appliedInputs;

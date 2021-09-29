@@ -21,6 +21,17 @@ function handle = ncs_initialize(maxSimTime, id, configStruct, filename)
     % Returns:
     %   >> handle (Key into ComponentMap, uint32)
     %      A handle (key into ComponentMap) which uniquely identifies the initialized NetworkedControlSystem.
+    %
+    % Literature: 
+    %  	Florian Rosenthal, Markus Jung, Martina Zitterbart, and Uwe D. Hanebeck,
+    %   CoCPN - Towards Flexible and Adaptive Cyber-Physical Systems Through Cooperation,
+    %   Proceedings of the 2019 16th IEEE Annual Consumer Communications & Networking Conference,
+    %   Las Vegas, Nevada, USA, January 2019.
+    %      
+    %   Markus Jung, Florian Rosenthal, and Martina Zitterbart,
+    %   CoCPN-Sim: An Integrated Simulation Environment for Cyber-Physical Systems,
+    %   Proceedings of the 2018 IEEE/ACM Third International Conference on Internet-of-Things Design and Implementation (IoTDI), 
+    %   Orlando, FL, USA, April 2018.
     
     %    This program is free software: you can redistribute it and/or modify
     %    it under the terms of the GNU General Public License as published by
@@ -34,6 +45,13 @@ function handle = ncs_initialize(maxSimTime, id, configStruct, filename)
     %
     %    You should have received a copy of the GNU General Public License
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+    
+    arguments
+        maxSimTime (1,1) double {mustBePositive, mustBeFinite}
+        id % arbitrary
+        configStruct {validateConfigStruct} % validation function below
+        filename {validateFilename} % validation function below
+    end
     
     persistent requiredVariables;
     requiredVariables = {'controlSequenceLength', 'maxMeasDelay', ...
@@ -77,32 +95,13 @@ function handle = ncs_initialize(maxSimTime, id, configStruct, filename)
     %   - inputConstraints: linear constraints d_i for MPC, i.e., c_i'*u_k <= d_i
     %   - inputConstraintWeightings: linear constraints weightings c_i for MPC, i.e., c_i'*u_k <= d_i
     %   - controlErrorWindowSize: the control error is in integral measure,
-    %     this parameter specifies the size (in time steps) of the sliding window used to
-    %     compute it (positive integer)
-    %   - ignoreControllerCache: flag to indicate whether a previously
-    %     computed and saved/cached controller shall be ignored (if
-    %     available) (default true)
+    %     this parameter specifies the size (in seconds) of the sliding window used to
+    %     compute it (positive scalar)
     %   - mpcHorizon: if the specified controller is a receding horizon one
     %     (i.e., a model predictive controller), the value of this variable
     %     denotes the length of the prediction horizon (positive integer);
     %     if not specified, the employed sequence length is used by default
     
-    assert(isempty(configStruct) || (isstruct(configStruct) && isscalar(configStruct)), ...
-        'ncs_initialize:InvalidConfigStruct', ...
-        '** <configStruct> must be a single struct **');    
-    assert(ischar(filename) && isvector(filename), ...
-        'ncs_initialize:InvalidFilename', ...
-        '** <filename> must be a character vector **');
-    assert(Checks.isPosScalar(maxSimTime), ...
-        'ncs_initialize:InvalidMaxSimeTime', ...
-        '** <maxSimTime> must be positive and given in pico-seconds. **');
-    
-    [pathStr, configFileName, extension] = fileparts(filename);
-    % 2 is returned in case of existing file
-    assert(exist(filename, 'file') == 2 && strcmp(extension, '.mat'), ...
-        'ncs_initialize:InvalidFile', ...
-        '** %s does not exist or is not a mat-file **', filename);
-        
     if isempty(configStruct)
         config = load(filename);
     else
@@ -138,23 +137,7 @@ function handle = ncs_initialize(maxSimTime, id, configStruct, filename)
     [plant, config] = initPlant(config);
     actuator = initActuator(config);
     ncsPlant = NcsPlant(plant, actuator);
-
-    if ~getConfigValueOrDefault(config, 'ignoreControllerCache', true)
-        % try to reuse controller, if possible
-        controller = doControllerCacheLookup(config, configFileName, pathStr, loopSteps);
-        if isempty(controller)
-            controller = initController(config, loopSteps);
-            newCacheInfo = Cache.insert(controller, [configFileName '_controller_' int2str(loopSteps)]);
-            if ~isempty(newCacheInfo)
-                % controller was successfully saved/cached
-                writeCacheInfo(configFileName, pathStr, newCacheInfo);
-            end
-        end
-    else
-        % compute the controller
-        controller = initController(config, loopSteps);
-    end
-        
+ 
     sensor = initSensor(config);
     if getConfigValueOrDefault(config, 'sensorEventBased', false)
         ncsSensor = EventBasedNcsSensor(sensor, ...
@@ -163,6 +146,7 @@ function handle = ncs_initialize(maxSimTime, id, configStruct, filename)
         ncsSensor = NcsSensor(sensor);
     end
     
+    controller = initController(config, loopSteps);
     if controller.requiresExternalStateEstimate
         % we need a filter
         assert(isfield(config, 'filterClassName'), ...
@@ -173,7 +157,7 @@ function handle = ncs_initialize(maxSimTime, id, configStruct, filename)
     else
         % controller does not require an external filter
         ncsController = initNcsController(config, controller, actuator);
-    end    
+    end
     
     ncsController.controlErrorWindowSize = getConfigValueOrDefault(config, 'controlErrorWindowSize', ...
         NcsController.defaultControlErrorWindowSize);
@@ -182,17 +166,33 @@ function handle = ncs_initialize(maxSimTime, id, configStruct, filename)
     ncs = NetworkedControlSystem(ncsController, ncsPlant, ncsSensor, id, config.samplingInterval, ...
         config.plantSamplingInterval, getConfigValueOrDefault(config, 'networkType', NetworkType.UdpLikeWithAcks));
     
-    ncs.initPlant(config.initialPlantState);
+    ncs.initPlant(config.initialPlantState, maxSimTime);
     ncs.initStatisticsRecording(maxSimTime);
     
-    if isfield(config, 'qocRateFunc') && isfield(config, 'controlErrorQocFunc')
-        translator = NcsTranslator(config.qocRateFunc, config.controlErrorQocFunc, 1 / ncs.samplingInterval);
-        %# function cfit sfit
-        ncs.attachTranslator(translator);
-    elseif isfield(config, 'translator')
+    % handle NcsTranslator, if present
+    translatorFile = getConfigValueOrDefault(config, 'translatorFile', []);
+    if ~isempty(translatorFile)
+        [~, ~, ext] = fileparts(translatorFile);
+        assert(exist(translatorFile, 'file') == 2 && strcmp(ext, '.mat'), ...
+        'ncs_initialize:InvalidTranslatorFile', ...
+            '** %s does not exist or is not a mat-file **', translatorFile);
+        
+        % we have a mat file, so load its content
+        assert(ismember('translator', who('-file', translatorFile)), ...
+            'ncs_initialize:CheckTranslatorFile', ...
+            '** Provided file %s must contain a variable named <translator> storing an NcsTranslator **', ...
+            translatorFile);
         % the following pragma is required to ensure deployed code is runnable
         %# function cfit sfit
-        ncs.attachTranslator(config.translator);
+        ncs.attachTranslator(matfile(translatorFile).translator);
+    else
+        % check if instead a translator was provided in the config file
+        translator = getConfigValueOrDefault(config, 'translator', []);
+        if ~isempty(translator)
+            % the following pragma is required to ensure deployed code is runnable
+            %# function cfit
+            ncs.attachTranslator(translator);
+        end
     end
     
     handle = ComponentMap.getInstance().addComponent(ncs);
@@ -243,84 +243,6 @@ function ncsController = initNcsController(config, controller, actuator)
     end    
 end
 
-%% doControllerCacheLookup
-function controller = doControllerCacheLookup(config, configFileName, pathStr, loopSteps)
-    cacheInfo = readCacheInfo(configFileName, pathStr);
-    controller = [];
-    if ~isempty(cacheInfo)
-        cachedController = Cache.lookup(cacheInfo);
-        if ~isempty(cachedController) && strcmp(class(cachedController), config.controllerClassName)
-            % check for additional, type dependent properties that must
-            % match
-            switch config.controllerClassName
-                case 'FiniteHorizonController'
-                    % we assume that constraints did not change
-                    if cachedController.horizonLength == loopSteps ...
-                            && cachedController.sequenceLength == config.controlSequenceLength
-                        controller = cachedController;
-                    end
-                case 'FiniteHorizonTrackingController'
-                    if cachedController.horizonLength == loopSteps ...
-                            && cachedController.sequenceLength == config.controlSequenceLength ...
-                            && isequal(config.refTrajectory, cachedController.refTrajectory)
-                        controller = cachedController;
-                    end
-                case 'NominalPredictiveController'
-                    % ensure that we use the correct sequence length
-                    cachedController.changeSequenceLength(config.controlSequenceLength);                    
-                    if ~isequal(cachedController.Q, config.Q) || ~isequal(cachedController.R, config.R)
-                        cachedController.changeCostMatrices(config.Q, config.R);
-                    end
-                    controller = cachedController;
-                case 'LinearlyConstrainedPredictiveController'
-                    refTrajectory = [];
-                    if isfield(config, 'refTrajectory')
-                        refTrajectory = config.refTrajectory;
-                    end
-                    % so far, reference trajectory must be equal
-                    if isequal(refTrajectory, cachedController.refTrajectory)
-                        controller = cachedController;
-                        if controller.sequenceLength ~= config.controlSequenceLength
-                            % use sequence length also as length of
-                            % optimization horizon
-                            controller.changeHorizonLength(config.controlSequenceLength);
-                            controller.changeSequenceLength(config.controlSequenceLength);
-                        end
-                        % check if the constraints changed
-                        [stateConstraints, weightings] = controller.getStateConstraints();
-                        if ~isequal(stateConstraints, config.stateConstraints) ...
-                                || ~isequal(weightings, config.stateConstraintWeightings)
-                            controller.changeStateConstraints(config.stateConstraintWeightings, ...
-                                config.stateConstraints);
-                        end
-                        [inputConstraints, weightings] = controller.getInputConstraints();
-                        if ~isequal(inputConstraints, config.inputConstraints) ...
-                                || ~isequal(weightings, config.inputConstraintWeightings)
-                            controller.changeInputConstraints(config.inputConstraintWeightings, ...
-                                config.inputConstraints);
-                        end
-                    end
-                case 'InfiniteHorizonController'
-                    if cachedController.sequenceLength == config.controlSequenceLength
-                        controller = cachedController;
-                    end
-                case 'InfiniteHorizonUdpLikeController'
-                    if cachedController.sequenceLength == config.controlSequenceLength ...
-                            && cachedController.maxMeasurementDelay == config.maxMeasDelay
-                        controller = cachedController;
-                    end
-                case 'EventTriggeredInfiniteHorizonController'
-                    if cachedController.sequenceLength == config.controlSequenceLength
-                        controller = cachedController;
-                        controller.transmissionCosts = config.transmissionCosts;                        
-                    end
-                otherwise
-                    controller = cachedController;
-            end
-         end
-    end
-end
-
 %% initActuator
 function actuator = initActuator(config)
     actuator = BufferingActuator(config.controlSequenceLength, zeros(size(config.B,2), 1));
@@ -329,37 +251,75 @@ end
 %% initPlant
 function [plant, configOut] = initPlant(configIn)
     configOut = configIn;
-    switch class(configIn.plant)
-        case 'InvertedPendulum'
+    switch metaclass(configIn.plant)
+        case ?InvertedPendulum
             plant = configIn.plant;
-            % set the noise of the continuous-time linearization if present
-            plant.W_cont = getConfigValueOrDefault(configIn, 'W_cont', zeros(4));
             
-            % obtain discretized and linearized model used by controller
-            [configOut.A, configOut.B, configOut.C, configOut.W] = plant.linearizeAroundUpwardEquilibrium(configIn.samplingInterval);
-
+            % get the noise affecting the nonlinear pendulum dynamics
+            % (i.e., the simulation of the pendulum)
+            % stored in the form of a (diagonal) 2-by-2 cov matrix
+            % if the plant is to be simulated with noise
+            if getConfigValueOrDefault(configIn, 'usePlantNoise', true)                
+                assert(isfield(configIn, 'W_pend'), ...
+                    'ncs_initialize:PendulumNoiseMissing', ...
+                    '** Variable <W_pend> must be present in the configuration since plant (inverted pendulum) shall be simulated with noise **');
+                plant.setNoise(Gaussian([0 0]', configIn.W_pend)); 
+            end
             % plant is simulated with sampling rate given in config
             plant.samplingInterval = configIn.plantSamplingInterval;
-            if getConfigValueOrDefault(configIn, 'usePlantNoise', true)
-                % use the discrete-time noise also for simulation the nonlinear plant
-                % use discretization obtained using plant sampling rate
-                % based on value of W_cont
-                [~, ~, ~, W_d] = plant.linearizeAroundUpwardEquilibrium();
-                plant.setNoise(Gaussian(zeros(4, 1), W_d));
-            end
-%             % we also translate the cost function for a fair comparison
-%             Q_d = integral(@(x) expm(A_cont'*x) * configIn.Q * expm(A_cont*x), ...
-%                 0, configIn.samplingInterval, 'ArrayValued', true)
-%             R_d = configIn.samplingInterval * configIn.R + B_cont' * integral(@(tau) integral(@(s) expm(A_cont'*s), 0, tau, 'ArrayValued', true) * configIn.Q * integral(@(s) expm(A_cont*s), 0, tau, 'ArrayValued', true), ...
-%                 0, configIn.samplingInterval, 'ArrayValued', true) * B_cont
-%            
-%             % ensure symmetry
-%             configOut.Q = (Q_d + Q_d') / 2;
-%             configOut.R = (R_d + R_d') / 2;
+            
+            % now extract the noise for the continuous-time linearization from the given matrix W
+            % tacitly assume that W is diagonal (noise components are
+            % independent) and at least either is non-zero (so that noise
+            % covariance of discrete-time linearization is positive definite)
+            plant.varDisturbanceForcePendulumContLin = configIn.W(1,1);
+            plant.varDisturbanceForceActuatorContLin = configIn.W(2,2);
+                 
+            % obtain discretized and linearized model used by controller
+            [configOut.A, configOut.B, configOut.C, configOut.W] ...
+                = plant.linearizeAroundUpwardEquilibrium(configIn.samplingInterval);
 
-            % enforce recomputation of controller, as A, B matrices changed
-            Cache.clear()            
-        case {'LinearPlant', 'NonlinearPlant'}
+% %             % we also translate the cost function for a fair comparison
+% %             [A_cont, B_cont] = plant.linearizeAroundUpwardEquilibriumCont();
+% %             Q_d = integral(@(x) expm(A_cont'*x) * configIn.Q * expm(A_cont*x), ...
+% %                 0, configIn.samplingInterval, 'ArrayValued', true)
+% %             R_d = configIn.samplingInterval * configIn.R + B_cont' * integral(@(tau) integral(@(s) expm(A_cont'*s), 0, tau, 'ArrayValued', true) * configIn.Q * integral(@(s) expm(A_cont*s), 0, tau, 'ArrayValued', true), ...
+% %                 0, configIn.samplingInterval, 'ArrayValued', true) * B_cont
+% %            
+% %             % ensure symmetry
+% %             configOut.Q = (Q_d + Q_d') / 2;
+% %             configOut.R = (R_d + R_d') / 2;
+        case ?DoubleInvertedPendulum
+            plant = configIn.plant;            
+            % get the noise affecting the nonlinear dynamics
+            % (i.e., the simulation of the pendulum)
+            % stored in the form of a (diagonal) 3-by-3 cov matrix
+            % if the plant is to be simulated with noise
+            if getConfigValueOrDefault(configIn, 'usePlantNoise', true)                
+                assert(isfield(configIn, 'W_pend'), ...
+                    'ncs_initialize:DoublePendulumNoiseMissing', ...
+                    '** Variable <W_pend> must be present in the configuration since plant (inverted double pendulum) shall be simulated with noise **');
+                plant.setNoise(Gaussian([0 0 0]', configIn.W_pend));                 
+            end
+            % plant is simulated with sampling rate given in config
+            plant.samplingInterval = configIn.plantSamplingInterval;
+            
+            % now extract the noise for the continuous-time linearization from the given matrix W
+            % tacitly assume that W is diagonal (noise components are
+            % independent) and at least either is non-zero (so that noise
+            % covariance of discrete-time linearization is positive definite)
+            plant.varDisturbanceForcePendulum1ContLin = configIn.W(1,1);
+            plant.varDisturbanceForcePendulum2ContLin = configIn.W(2,2);
+            plant.varDisturbanceForceActuatorContLin = configIn.W(3,3);
+            % obtain discretized and linearized model used by controller
+            [configOut.A, configOut.B, configOut.C, configOut.W] ...
+                = plant.linearizeAroundUpwardEquilibrium(configIn.samplingInterval);
+        case ?DoubleIntegrator
+            plant = configIn.plant;
+             % obtain discretized used by controller
+            [configOut.A, configOut.B, configOut.C, configOut.W] ...
+                = plant.getDiscretizationForSamplingInterval(configIn.samplingInterval);            
+        case {?LinearPlant, ?NonlinearPlant}
             plant = configIn.plant;
         otherwise
             error('ncs_initialize:InitPlant:UnsupportedPlantClass', ...
@@ -410,7 +370,7 @@ function controller = initController(config, horizonLength)
             
             useMex = true; % by default, use the mex implementation to compute the gains
             if isfield(config, 'stateConstraintWeightings')
-                assert(sum(isfield(config, {'inputConstraintWeightings', 'constraintBounds'})) == 2, ...
+                assert(all(isfield(config, {'inputConstraintWeightings', 'constraintBounds'})), ...
                     'ncs_initialize:InitController:FiniteHorizonController', ...
                     ['** Variables <inputConstraintWeightings> and <constraintBounds> ' ...
                     'must be present in the configuration to init the constrained FiniteHorizonController **']);
@@ -424,14 +384,14 @@ function controller = initController(config, horizonLength)
                     transitionMatrixCa, config.controlSequenceLength, horizonLength, useMex);
             end
         case 'LinearlyConstrainedPredictiveController'
-            if sum(isfield(config, {'stateConstraintWeightings', 'stateConstraints'})) == 2
+            if all(isfield(config, {'stateConstraintWeightings', 'stateConstraints'}))
                 stateConstraintWeightings = config.stateConstraintWeighting;
                 stateConstraints = config.stateConstraints;
             else
                 stateConstraintWeightings = [];
                 stateConstraints = [];
             end
-            if sum(isfield(config, {'inputConstraintWeightings', 'inputConstraints'})) == 2
+            if all(isfield(config, {'inputConstraintWeightings', 'inputConstraints'}))
                 inputConstraintWeightings = config.stateConstraintWeighting;
                 inputConstraints = config.inputConstraints;
             else
@@ -439,7 +399,7 @@ function controller = initController(config, horizonLength)
                 inputConstraints = [];
             end
             
-            if sum(isfield(config, {'Z', 'refTrajectory'})) == 2
+            if all(isfield(config, {'Z', 'refTrajectory'}))
                 % we track a trajectory
                 controller = LinearlyConstrainedPredictiveController(config.A, config.B, config.Q, config.R, ...
                     config.controlSequenceLength, config.caDelayProbs, stateConstraintWeightings, stateConstraints, ...
@@ -461,7 +421,7 @@ function controller = initController(config, horizonLength)
         case 'FiniteHorizonTrackingController'
             % check if the required additional fields are present in the
             % config: Z (matrix) and refTrajectory (matrix)
-            assert(sum(isfield(config, {'Z', 'refTrajectory'})) == 2, ...
+            assert(all(isfield(config, {'Z', 'refTrajectory'})), ...
                 'ncs_initialize:InitController:FiniteHorizonTrackingController', ...
                 '** Variables <Z> and <refTrajectory> must be present in the configuration to init %s **', ...
                     'FiniteHorizonTrackingController');
@@ -485,7 +445,7 @@ function controller = initController(config, horizonLength)
                 config.controlSequenceLength);
         case 'ExpectedInputPredictiveController'
             controller = ExpectedInputPredictiveController(config.A, config.B, config.Q, config.R, ...
-                config.controlSequenceLength, config.caDelayProbs);        
+                config.controlSequenceLength, config.caDelayProbs);
         case 'PolePlacementPredictiveController'
             assert(isfield(config, 'polesCont'), ...
                 'ncs_initialize:InitController:PolePlacementPredictiveController', ...
@@ -592,10 +552,10 @@ function controller = initController(config, horizonLength)
             
             controller = RecedingHorizonUdpLikeController(config.A, config.B, config.C, config.Q, config.R, ...
                 transitionMatrixCa, scDelayProbs, config.controlSequenceLength, ...
-                config.maxMeasDelay, actualW, config.V, controllerHorizonLength, x0, x0Cov, true);
+                config.maxMeasDelay, actualW, config.V, controllerHorizonLength, x0, x0Cov);
         case 'MSSController'
             controllerDelta = 0.1; % to be promoted to configuration parameter
-            controller = MSSController(config.A, config.B, config.controlSequenceLength, controllerDelta);            
+            controller = MSSController(config.A, config.B, config.controlSequenceLength, controllerDelta);
         otherwise
             error('ncs_initialize:InitController:UnsupportedControllerClass', ...
                 '** Controller class with name ''%s'' unsupported or unknown **', config.controllerClassName);
@@ -622,26 +582,24 @@ function [filter, filterPlantModel, filterSensorModel] = initFilter(config)
     filterSensorModel = [];
     switch config.filterClassName
         case 'DelayedKF'
-            delayWeights = Utility.computeStationaryDistribution(transitionMatrix);
-            filter = DelayedKF(config.maxMeasDelay, transitionMatrix);
-            
-            filterPlantModel = DelayedKFSystemModel(config.A, ...
-                config.B, Gaussian(zeros(size(config.A, 1), 1), config.W), ...
-                numModes, config.maxMeasDelay, delayWeights);
+            filter = DelayedKF(config.maxMeasDelay, transitionMatrix);            
             if isfield(config, 'G')
-                filterPlantModel.setSystemNoiseMatrix(config.G);
-            end 
-        case 'DelayedModeIMMF'
+                filterPlantModel = LinearPlant(config.A, config.B, config.W, config.G);
+            else
+                filterPlantModel = LinearPlant(config.A, config.B, config.W);
+            end
+        case 'DelayedModeIMMF'            
             modeFilters = arrayfun(@(mode) EKF(sprintf('KF for mode %d', mode)), 1:numModes, 'UniformOutput', false);
             filter = DelayedModeIMMF(modeFilters, transitionMatrix, config.maxMeasDelay);
-             
-            filterPlantModel = JumpLinearSystemModel(numModes, ...
-                arrayfun(@(~) LinearPlant(config.A, config.B, config.W), ...
-                    1:numModes, 'UniformOutput', false));
             if isfield(config, 'G')
                 % add the G matrix to all mode-conditioned models
-                cellfun(@(model) model.setSystemNoiseMatrix(config.G), filterPlantModel.modeSystemModels);
-            end
+                modePlants = arrayfun(@(~) LinearPlant(config.A, config.B, config.W, config.G), ...
+                    1:numModes, 'UniformOutput', false);
+            else
+                modePlants = arrayfun(@(~) LinearPlant(config.A, config.B, config.W), ...
+                    1:numModes, 'UniformOutput', false);
+            end            
+            filterPlantModel = JumpLinearSystemModel(numModes, modePlants);
         otherwise
             error('ncs_initialize:InitFilter:UnsupportedFilterClass', ...
                 '** Filter class with name ''%s'' unsupported or unknown **', config.filterClassName);
@@ -666,35 +624,6 @@ function [filter, filterPlantModel, filterSensorModel] = initFilter(config)
     filter.setState(config.initialEstimate);
 end
 
-%% writeCacheInfo
-function writeCacheInfo(configFileName, configFilePath, cacheInfo)
-    cacheInfoFile = [configFilePath filesep configFileName '.cacheinfo'];
-    [fileId, errMsg] = fopen(cacheInfoFile, 'w', 'n', 'UTF-8');
-    assert(fileId > 0, 'ncs_initialize:WriteCacheInfo:Fopen', errMsg);
-    
-    % save date as full precision double, name as string, and size as integer
-    fprintf(fileId, 'name %s\ndate %.15f\nsize %d', cacheInfo.name, cacheInfo.date, cacheInfo.size);
-    fclose(fileId);
-end
-
-%% readCacheInfo
-function cacheInfo = readCacheInfo(configFileName, configFilePath)
-    % first check if cacheinfo file is present
-    cacheInfo = [];
-    cacheInfoFile = [configFilePath filesep configFileName '.cacheinfo'];
-    if exist(cacheInfoFile, 'file') == 2
-        [fileId, errMsg] = fopen(cacheInfoFile, 'r', 'n', 'UTF-8');
-        
-        assert(fileId > 0, 'ncs_initialize:ReadCacheInfo:Fopen', errMsg);
-
-        % create the structure from the file
-        cacheInfo.name = sscanf(fgetl(fileId), 'name %s');
-        cacheInfo.date = sscanf(fgetl(fileId), 'date %f');
-        cacheInfo.size = sscanf(fgetl(fileId), 'size %d');
-        fclose(fileId);
-    end
-end
-
 %% checkConfig
 function checkConfig(config, expectedVariables)
      %configVars = who('-file', configFile);
@@ -715,4 +644,24 @@ function value = getConfigValueOrDefault(config, fieldname, defaultValue)
     else
         value = defaultValue;
     end
+end
+
+%% validateConfigStruct
+function validateConfigStruct(configStruct)
+    assert(isempty(configStruct) || (isstruct(configStruct) && isscalar(configStruct)), ...
+        'ncs_initialize:InvalidConfigStruct', ...
+        '** <configStruct> must be a single struct **');    
+end
+
+%% validateFilename
+function validateFilename(filename)
+    assert(ischar(filename) && isvector(filename), ...
+        'ncs_initialize:InvalidFilename', ...
+        '** <filename> must be a character vector **');
+    
+    [~, ~, extension] = fileparts(filename);
+    % 2 is returned in case of existing file
+    assert(exist(filename, 'file') == 2 && strcmp(extension, '.mat'), ...
+        'ncs_initialize:InvalidFile', ...
+        '** %s does not exist or is not a mat-file **', filename);
 end

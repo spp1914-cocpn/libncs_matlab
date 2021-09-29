@@ -23,7 +23,7 @@ function config = CreateInvertedPendulumScenario(samplingInterval)
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2018-2019  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2018-2021  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -44,6 +44,10 @@ function config = CreateInvertedPendulumScenario(samplingInterval)
     %    You should have received a copy of the GNU General Public License
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+    arguments
+        samplingInterval (1,1) double {mustBePositive, mustBeFinite} = 0.01; % in seconds 
+    end
+    
     %0 time steps delay not possibly
     %1 85%
     %2-11 time steps uniform 7%
@@ -60,10 +64,6 @@ function config = CreateInvertedPendulumScenario(samplingInterval)
     Q = diag([100 0 5000 0]); % state weighting matrix for LQR, small angle deviations are crucial
     R = 100; % input weighting matrix for LQR
     % this combination allows for larger inputs
-    
-    if nargin ~= 1
-        samplingInterval = 0.01; % in seconds
-    end
     
     % discretize the cost matrices, to get equivalent discrete-time
 %     % regulator

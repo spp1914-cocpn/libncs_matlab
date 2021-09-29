@@ -2,12 +2,23 @@ classdef NcsController < handle
     % Wrapper class for controllers in an NCS to provide a consistent
     % interface for controllers that require an external filter or state
     % estimate, and those which don't.
+    %
+    % Literature: 
+    %  	Florian Rosenthal, Markus Jung, Martina Zitterbart, and Uwe D. Hanebeck,
+    %   CoCPN - Towards Flexible and Adaptive Cyber-Physical Systems Through Cooperation,
+    %   Proceedings of the 2019 16th IEEE Annual Consumer Communications & Networking Conference,
+    %   Las Vegas, Nevada, USA, January 2019.
+    %      
+    %   Markus Jung, Florian Rosenthal, and Martina Zitterbart,
+    %   CoCPN-Sim: An Integrated Simulation Environment for Cyber-Physical Systems,
+    %   Proceedings of the 2018 IEEE/ACM Third International Conference on Internet-of-Things Design and Implementation (IoTDI), 
+    %   Orlando, FL, USA, April 2018.
     
     % >> This function/class is part of CoCPN-Sim
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2017-2020  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2017-2021  Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -29,11 +40,16 @@ classdef NcsController < handle
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
     
     properties (Constant, Access = public)
-        defaultControlErrorWindowSize = 10; % in time steps
+        defaultControlErrorWindowSize = 1; % in seconds
+        defaultControlErrorWindowBaseSampleInterval = 1 / 200; % in seconds
     end
     
     properties (Access = public)
-        controlErrorWindowSize(1,1) double {mustBePositive, mustBeInteger} = NcsController.defaultControlErrorWindowSize; % in time steps
+        controlErrorWindowSize(1,1) double {mustBePositive} = NcsController.defaultControlErrorWindowSize; % in seconds
+        controlErrorWindowBaseSampleRate(1,1) double {mustBePositive} = NcsController.defaultControlErrorWindowBaseSampleInterval; % in seconds
+        % as the error is based on a sliding window, resampling is
+        % required so that computation can be carried out properly
+        % the sample rate specified here is used for this 
     end
     
     properties (SetAccess=immutable, GetAccess = public)
@@ -58,8 +74,12 @@ classdef NcsController < handle
         isEventBased(1,1) logical = false;  
     end
     
+    properties (Access = protected)
+        errorOccurred = false; % a flag
+    end
+    
     properties (Access = private)
-        statistics;
+        statistics; % a struct of timeseries objects, initialized in initStatisticsRecording()
     end
     
     properties (Dependent, GetAccess = public)
@@ -118,7 +138,22 @@ classdef NcsController < handle
             this.doComputeControlErrorFun = this.constructComputeControlErrorFun();
             this.canChangeCaProbsFun = this.constructCanChangeCaDelayProbsFun();
         end        
-                
+      
+        %% isControllerStateAdmissible
+        function isAdmissible = isControllerStateAdmissible(this)
+            % Function to check whether the current plant state is admissible (e.g.,
+            % does not violate constraints).
+            %           
+            % Returns:
+            %   << isAdmissible (Flag, i.e., boolean)
+            %      Flag to indicate whether the current controller state is
+            %      admissible. It might be inadmissible, e.g., due to a
+            %      failed measurement update by the used filter.
+            
+            % inadmissible if error flag set
+            isAdmissible = ~this.errorOccurred;
+        end
+        
         %% computeCosts
         function controlCosts = computeCosts(this, plantStates, appliedInputs)
             % Compute accrued costs for the given state and input
@@ -159,9 +194,10 @@ classdef NcsController < handle
             %      The input applied to the plant at the given timestep.
             %
             %   >> timestep (Positive integer)
-            %      The current time step, i.e., the integer yielding the
-            %      current simulation time (in s) when multiplied by the
-            %      loop's sampling interval.
+            %      The current time step, the integer yielding the
+            %      current simulation time (in seconds) when multiplied by the
+            %      loop's sampling interval in case the sampling interval
+            %      is fixed.
             %
             % Returns:
             %   << stageCosts (Nonnegative scalar)
@@ -180,20 +216,29 @@ classdef NcsController < handle
         
         %% getCurrentControlError
         function [estimatedControlError, actualControlError] ...
-                = getCurrentControlError(this, timestep, plantStateHistory)
+                = getCurrentControlError(this, timestep, currSimTimeSec, plantStateHistory)
             % Get the current control error (as perceived by the
             % controller) at the given time step, and, optionally, the
             % current true error based on the given true state trajectory.
             %
             % Parameters:
             %   >> timestep (Positive integer)
-            %      The current time step, i.e., the integer yielding the
-            %      current simulation time (in s) when multiplied by the
-            %      loop's sampling interval.
+            %      The current time step, the integer yielding the
+            %      current simulation time (in seconds) when multiplied by the
+            %      loop's sampling interval in case the sampling interval
+            %      is fixed.
             %
-            %   >> plantStateHistory (Matrix, optional)
+            %   >> currSimTimeSec (Positive scalar)
+            %      The current simulation time (in seconds) that
+            %      corresponds to the given timestep.
+            %      Not necessecarily an integer multiple of the given simulation time
+            %      step, because the controller sampling rate might change
+            %      during simulation runs.
+            %
+            %   >> plantStateHistory (timeseries, optional)
             %      The plant true states (with respect to the plant model),
-            %      with the last column being the plant true state at the given time step.
+            %      with the last element being the plant true state at the
+            %      given simulation time.
             %
             % Returns:
             %   << estimatedControlError (Nonnegative scalar)
@@ -207,35 +252,38 @@ classdef NcsController < handle
             %      provided plant true states (with respect to the controller plant model), or, in a tracking task, the norm of
             %      the accumulated norm of the deviation from the reference
             %      output or setpoint.
-            
-            % we compute the conrol error with respect to the state
-            % variables of the controller            
-            endIdx = timestep + 1;
-            beginIdx = max(2, endIdx - this.controlErrorWindowSize + 1);
-
-            controllerStateHistory = this.statistics.controllerStates(:, beginIdx:endIdx);
+                       
+            % we compute the control error with respect to the state variables of the controller
+            timevec = 0:this.controlErrorWindowBaseSampleRate:currSimTimeSec;
+            resampledControllerStates = this.statistics.controllerStates.resample(timevec, 'zoh');
+            controllerStateHistory = squeeze(resampledControllerStates.getdatasamples(...
+                     resampledControllerStates.Time > (currSimTimeSec - this.controlErrorWindowSize) & resampledControllerStates.Time <= currSimTimeSec) ...
+                     );
+            % TODO: resampling can be optimized, no need to resample whole timeseries            
             if isempty(this.plantStateOrigin)
-                controllerStates = controllerStateHistory;
-            else                
-                controllerStates = controllerStateHistory - this.plantStateOrigin;
+                estimatedControlError = this.computeControlError(controllerStateHistory, timestep);
+            else
+                estimatedControlError = this.computeControlError(controllerStateHistory - this.plantStateOrigin, timestep);                
             end
-            estimatedControlError = this.computeControlError(controllerStates, timestep);
-            
-            if nargin == 3 && nargout == 2
+         
+            if nargin > 2 && nargout == 2
+                resampledPlantStates = plantStateHistory.resample(timevec, 'zoh');
+                plantStates = squeeze(resampledPlantStates.getdatasamples(...
+                     resampledPlantStates.Time > (currSimTimeSec - this.controlErrorWindowSize)...
+                        & resampledPlantStates.Time <= currSimTimeSec) ...
+                     );
                 if isempty(this.plantStateOrigin)
-                    states = plantStateHistory(:, beginIdx:endIdx);                    
+                    actualControlError = this.computeControlError(plantStates, timestep);                    
                 else
-                    states = plantStateHistory(:, beginIdx:endIdx) - this.plantStateOrigin;                    
-                end
-                actualControlError = this.computeControlError(states, timestep);
+                    actualControlError = this.computeControlError(plantStates - this.plantStateOrigin, timestep);                                        
+                end                
             end            
         end        
     end
   
-    methods (Access = public, Sealed)
-        
+    methods (Access = public, Sealed)     
         %% step
-        function dataPacket = step(this, timestep, scPackets, acPackets, plantMode)
+        function dataPacket = step(this, timestep, scPackets, acPackets, plantMode, currSimTimeSec)
             % Template method to compute a control sequence as part of a control cycle in an
             % NCS.
             % The following functions, that can be overriden by subclasses, are called:
@@ -246,9 +294,10 @@ classdef NcsController < handle
             %
             % Parameters:
             %   >> timestep (Positive integer)
-            %      The current time step, i.e., the integer yielding the
-            %      current simulation time (in s) when multiplied by the
-            %      loop's sampling interval.
+            %      The current time step, the integer yielding the
+            %      current simulation time (in seconds) when multiplied by the
+            %      loop's sampling interval in case the sampling interval
+            %      is fixed.
             %     
             %   >> scPackets (Array of DataPackets, might be empty)
             %      An array of DataPackets containing measurements taken and transmitted from the sensor.
@@ -259,6 +308,14 @@ classdef NcsController < handle
             %   >> plantMode (Nonnegative integer, might be empty)
             %      The previous true plant mode (theta_{k-1}), or the empty
             %      matrix, if not directly known to the controller.
+            %
+            %   >> currSimTimeSec (Positive scalar)
+            %      The current simulation time (in seconds) that
+            %      corresponds to the given timestep, needed for the
+            %      recording of the statistics (cf. recordStatistics(), last step of this template method).
+            %      Not necessecarily an integer multiple of the given time
+            %      step, because the controller sampling rate might change
+            %      during simulation runs.
             %
             % Returns:
             %   << dataPacket (DataPacket or empty matrix)
@@ -273,57 +330,93 @@ classdef NcsController < handle
             dataPacket = this.postDoStep(inputSequence, controllerState, timestep);
             
             % update the recorded data accordingly            
-            this.recordStatistics(timestep, numUsedMeas, numDiscardedMeas, controllerState);
+            this.recordStatistics(currSimTimeSec, numUsedMeas, numDiscardedMeas, controllerState);
         end
         
         %% initStatisticsRecording
-        function initStatisticsRecording(this, maxLoopSteps, dimState)
-            % maxLoopSteps is an educated guess: actual number of steps can
-            % be different if controller adapts sampling rate an runtime
-            this.statistics.numUsedMeasurements = nan(1, maxLoopSteps);
-            this.statistics.numDiscardedMeasurements = nan(1, maxLoopSteps);            
+        function initStatisticsRecording(this)
+            % Initialize the recording of data to be gathered during the simulation, 
+            % which are (at every time step): controller state, 
+            % number of used measurements, number of discarded measurements
+            % 
+            % In particular, memory is allocated and the initial controller state is recorded.
             %
-            this.statistics.controllerStates = zeros(dimState, maxLoopSteps + 1);
+            this.statistics.measInfo = timeseries(); % each element is a 2d column vector; [numUsedMeas; numDiscardedMeas]
+            this.statistics.controllerStates = timeseries(this.getControllerState(), 0);
         end
         
         %% getStatistics
-        function controllerStats = getStatistics(this, numControllerSteps)
+        function controllerStats = getStatistics(this)
             % Get the statistical data that has been recorded during a
-            % simulation run of a given number of time steps.
-            %
-            % Parameters:
-            %   >> numControllerSteps (Positive integer)
-            %      The number of invocations of the controller during the
-            %      simulation of the NCS.
+            % simulation run so far.
             %
             % Returns:
             %   << statistics (Struct)
             %      The statistical data collected during the simulation.
             %
             
-            if numControllerSteps < numel(this.statistics.numUsedMeasurements)
-                controllerStats.numUsedMeasurements = this.statistics.numUsedMeasurements(1:numControllerSteps);
-                controllerStats.numDiscardedMeasurements = this.statistics.numDiscardedMeasurements(1:numControllerSteps);
-                controllerStats.controllerStates = this.statistics.controllerStates(:, 1:numControllerSteps + 1);
-            elseif numControllerSteps == size(this.statistics.controllerStates, 2)
-                controllerStats.numUsedMeasurements = this.statistics.numUsedMeasurements(1:numControllerSteps);
-                controllerStats.numDiscardedMeasurements = this.statistics.numDiscardedMeasurements(1:numControllerSteps);
-                controllerStats.controllerStates = this.statistics.controllerStates;    
+            controllerStats.controllerStates = squeeze(this.statistics.controllerStates.Data);
+            controllerStats.times = this.statistics.controllerStates.Time; % in seconds
+            
+            measInfo = squeeze(this.statistics.measInfo.Data);
+            % corner case: No data have been recorded yet
+            if isempty(measInfo)
+                controllerStats.numUsedMeasurements = [];
+                controllerStats.numDiscardedMeasurements = [];
             else
-                controllerStats.numUsedMeasurements = this.statistics.numUsedMeasurements;
-                controllerStats.numDiscardedMeasurements = this.statistics.numDiscardedMeasurements;
-                controllerStats.controllerStates = this.statistics.controllerStates;               
+                controllerStats.numUsedMeasurements = measInfo(1, :);
+                controllerStats.numDiscardedMeasurements = measInfo(2, :);
             end
         end
         
         %% getStatisticsForTimestep
-        function [numUsedMeasurements, numDiscardedMeasurements, controllerState] = getStatisticsForTimestep(this, timestep)
-            % get the data receorded at the specified time step
-            numUsedMeasurements = this.statistics.numUsedMeasurements(timestep);
-            numDiscardedMeasurements = this.statistics.numDiscardedMeasurements(timestep);
-            controllerState = this.statistics.controllerStates(:, timestep + 1);
+        function [numUsedMeasurements, numDiscardedMeasurements, controllerState, simTimeSec] = getStatisticsForTimestep(this, timestep)
+            % Get the data that has been recorded during a
+            % simulation for a particular timestep.
+            %
+            % Parameters: 
+            %   >> timestep (Positive integer)
+            %      The time step for which to get the recorded statistics.
+            %
+            % Returns:
+            %   << numUsedMeasurements (Nonnegative integer)
+            %      The number of processed measurements at the given time step.
+            %
+            %   << numDiscardedMeasurements (Nonnegative integer)
+            %      The number of discarded measurements at the given time step.
+            %
+            %   << controllerState (Column vector)
+            %      The controller's estimate of the plant state at the given time step.
+            %
+            %   >> simTimeSec (Positive scalar, optional)
+            %      The simulation time (in seconds) that
+            %      corresponds to the given timestep.
+            %      Not necessecarily an integer multiple of the given time
+            %      step, because the controller sampling rate might change
+            %      during simulation runs.
+            %
+            arguments
+                this
+                timestep(1,1) double {mustBePositive, mustBeInteger}
+            end
+            
+            % check that time step (index of element in timeseries) is
+            % existing and does not refer to "future"
+            assert(this.statistics.measInfo.Length >= timestep, ...
+                'NcsController:GetStatisticsForTimestep:InvalidTimestep', ...
+                '** Simulation has not yet reached timestep %d', timestep);
+            
+            % get the data recorded at the specified time step
+            measInfo = this.statistics.measInfo.getdatasamples(timestep);
+            numUsedMeasurements = measInfo(1);
+            numDiscardedMeasurements = measInfo(2);
+            controllerState = squeeze(this.statistics.controllerStates.Data(:, :, timestep + 1));
+
+            if nargout == 4
+                simTimeSec = this.statistics.controllerStates.Time(timestep + 1);
+           end
         end
-        
+       
         %% changeSequenceLength
         function ret = changeSequenceLength(this, newSequenceLength)
             % Change the length of the control sequence used by the
@@ -373,11 +466,37 @@ classdef NcsController < handle
             end
         end
         
+        %% changeScDelayProbs
+        function ret = changeScDelayProbs(this, newScDelayProbs)
+            % Change the probability distribution of the delays in the
+            % sensor-controller link assumed by the employed controller. 
+            % This operation does nothing but returning false if this is not supported by the controller.
+            %
+            % Parameters:
+            %   >> newScDelayProbs (Nonnegative vector)
+            %      The new probability distribution to be assumed by the controller.
+            %
+            % Returns:
+            %   << ret (Logical Scalar, i.e., a boolean)
+            %      A flag indicating whether the probability distribution
+            %      was changed.
+            %      False is returned in case the controller does not support this.
+            
+            ret = false;
+            if this.canChangeScDelayProbs()
+                % validate the given probability distribution
+                Validator.validateDiscreteProbabilityDistribution(newScDelayProbs);
+                % do the change
+                this.doChangeScDelayProbs(newScDelayProbs);
+                ret = true;
+            end
+        end
+        
         %% changeModelParameters
-        function ret = changeModelParameters(this, newA, newB, newW, newC)            
+        function ret = changeModelParameters(this, newA, newB, newW)
             ret = false;
             if this.canChangeModelParameters()
-                this.doChangeModelParameters(newA, newB, newW, newC);
+                this.doChangeModelParameters(newA, newB, newW);
                 ret = true;
             end
         end
@@ -440,11 +559,6 @@ classdef NcsController < handle
             
             [controllerState, inputSequence, numUsedMeas, numDiscardedMeas] ...
                 = this.doStepFun(measurements, measDelays, modeObservations, modeDelays);
-            % shift controller state if required, to be expressed with
-            % regards to the plant coordinates
-            if ~isempty(this.plantStateOrigin)
-                controllerState = controllerState + this.plantStateOrigin;
-            end
         end
         
         %% postDoStep
@@ -485,14 +599,16 @@ classdef NcsController < handle
         end
         
         %% recordStatistics
-        function recordStatistics(this, timestep, numUsedMeas, numDiscardedMeas, controllerState)
+        function recordStatistics(this, currSimTimeSec, numUsedMeas, numDiscardedMeas, controllerState)
             % Last function of the step() template method to record statistics.
             %
             % Parameters:
-            %   >> timestep (Positive integer)
-            %      The current time step, i.e., the integer yielding the
-            %      current simulation time (in s) when multiplied by the
-            %      loop's sampling interval.
+            %   >> currSimTimeSec (Positive scalar)
+            %      The current simulation time (in seconds) that
+            %      corresponds to the given timestep.
+            %      Not necessecarily an integer multiple of the given time
+            %      step, because the controller sampling rate might change
+            %      during simulation runs.
             %
             %   << numUsedMeas (Nonnegative integer)
             %      The number of measurements processed by the controller.
@@ -505,11 +621,12 @@ classdef NcsController < handle
             %      expressed with regards to the plant coordinates, as
             %      returned by the doStep() method. In this default
             %      implementation, this parameter is ignored.
-            %
-            
-            this.statistics.numUsedMeasurements(timestep) = numUsedMeas;
-            this.statistics.numDiscardedMeasurements(timestep) = numDiscardedMeas;
-            this.statistics.controllerStates(:, timestep + 1) = controllerState;
+            %            
+
+            this.statistics.controllerStates = ...
+                this.statistics.controllerStates.addsample('Data', controllerState(:), 'Time', currSimTimeSec);
+            this.statistics.measInfo = ...
+                this.statistics.measInfo.addsample('Data', [numUsedMeas; numDiscardedMeas], 'Time', currSimTimeSec);            
         end       
         
         %% computeControlError
@@ -534,11 +651,10 @@ classdef NcsController < handle
         function ret = canChangeCaDelayProbs(this)
             % Determine whether the delay distribution for the
             % controller-actuator link assumed by the controller can be
-            % changed at runtime.
-            % Currently, this default implementation always returns false as this
-            % functionality is not yet implemented for the controllers (that don't require a filter) in use.
-            % The only exception is the IMMBasedRecedingHorizonController,
-            % for which functions returns true.
+            % changed at runtime. 
+            % Controllers that subclass the mixin 'CaDelayProbsChangeable'
+            % support this.
+            %
             %
             % Parameters:
             %   >> ret (Logical Scalar, i.e., a boolean)
@@ -548,21 +664,40 @@ classdef NcsController < handle
             ret = this.canChangeCaProbsFun();
         end
         
+        %% canChangeScDelayProbs
+        function ret = canChangeScDelayProbs(this)
+            % Determine whether the delay distribution for the
+            % sensor-controller link assumed by the controller can be
+            % changed at runtime. 
+            % Controllers that subclass the mixin 'ScDelayProbsChangeable'
+            % support this.
+            %
+            %
+            % Parameters:
+            %   >> ret (Logical Scalar, i.e., a boolean)
+            %      A flag indicating whether the probability distribution
+            %      can be changed at runtime.
+            
+            ret = Checks.isClass(this.controller, 'ScDelayProbsChangeable');         
+        end
+        
         %% canChangeModelParameters
-        function ret = canChangeModelParameters(this)            
-            ret = Checks.isClass(this.controller, 'IMMBasedRecedingHorizonController');
+        function ret = canChangeModelParameters(this)
+            ret = Checks.isClass(this.controller, 'ModelParamsChangeable');         
         end
         
         %% doChangeCaDelayProbs
-        function doChangeCaDelayProbs(this, caDelayProbs)
-            %error('NcsController:DoChangeCaDelayProbs:UnsupportedOperation', ...
-            %    '** This should not happen, intended to be overriden by subclasses. **');
+        function doChangeCaDelayProbs(this, caDelayProbs)           
             this.controller.changeCaDelayProbs(caDelayProbs);
+        end
+        
+        %% doChangeScDelayProbs
+        function doChangeScDelayProbs(this, scDelayProbs)           
+            this.controller.changeScDelayProbs(scDelayProbs);
         end
         
         %% doChangeSamplingInterval
         function doChangeModelParameters(this, newA, newB, newW, ~)
-            % so far only for the IMMBasedRecedingHorizonController
             this.controller.changeModelParameters(newA, newB, newW);
         end
         
@@ -587,8 +722,23 @@ classdef NcsController < handle
             else
                 sequence = [];
             end
-        end       
-       
+        end
+        
+        %% getControllerState
+        function controllerState = getControllerState(this)
+            % Get the plant state as currently perceived by the controller, i.e., it's estimate of the plant state.
+            %
+            % Returns:
+            %   << controllerState (Column vector)
+            %      The controller's current estimate of the plant state.
+            %      
+            controllerState = this.controller.getControllerPlantState();
+            % shift controller state if required, to be expressed with
+            % regards to the plant coordinates
+            if ~isempty(this.plantStateOrigin)
+                controllerState = controllerState + this.plantStateOrigin;
+            end
+        end
     end
     
     methods (Static, Access = protected)         
@@ -638,13 +788,11 @@ classdef NcsController < handle
             modeObservations = [];
             modeDelays = [];
             if numel(acPackets) ~= 0
-                % get the observed modes from the ACK packets
                 modeObservations = zeros(1, numel(acPackets));
                 modeDelays = zeros(1, numel(acPackets));
-                for i=1:numel(acPackets)
-                    modeTime = acPackets(i).payload{2}.timeStep; % the time step of the mode piggy-backed by the ack
-                    modeObservations(i) = acPackets(i).payload{2}.theta; % the value of the mode, given as integer in [1, controlSeqLength + 1]
-                    modeDelays(i) = timestep - modeTime;
+                for j=1:numel(acPackets)
+                    modeDelays(j) = acPackets(j).packetDelay; % i, the time step the ACK was issued
+                    modeObservations(j) = acPackets(j).payload{2}; % the true mode at time i (i.e., value of theta_i)
                 end
             end
         end
@@ -682,15 +830,10 @@ classdef NcsController < handle
         end
     end
     
-    methods (Access = private)
-        
+    methods (Access = private)        
         %% constructCanChangeCaDelayProbsFun
         function fun = constructCanChangeCaDelayProbsFun(this)
-            if Checks.isClass(this.controller, 'IMMBasedRecedingHorizonController')
-                fun = @() true;
-            else
-                fun = @() false;
-            end
+            fun = @() Checks.isClass(this.controller, 'CaDelayProbsChangeable');            
         end
         
         %% constructComputeControlErrorFun
@@ -701,18 +844,25 @@ classdef NcsController < handle
                 % we track a reference of arbitrary dimension
                 fun=@computeTrackingError;
             else
-                % we drive the plant to the origin
-                %fun = @(states, timestep) sum(sqrt(sum(states .^ 2)));
-                fun = @(states, timestep) sum(vecnorm(states));
-            end
+                % we drive the plant to the origin                
+                %fun = @(states, timestep) sum(vecnorm(states));
+                fun = @(states, timestep) sum(vecnorm(states) .* normalize(hamming(size(states, 2))', 'norm', 1));
+                % weights are symmetric 
+            end            
             
             %% computeTrackingError
-            function trackingError = computeTrackingError(states, timestep)
+            function trackingError = computeTrackingError(states, timestep)               
                 trackingError = 0;
                 timesteps = timestep - [size(states, 2)-1:-1:0];
+                weights = normalize(hamming(size(states, 2)), 'norm', 1);  % weights are symmetric              
+                %samples = zeros(1, size(states, 2));
+                % most recent sample is last
                 for i=1:numel(timesteps)
-                    trackingError = trackingError + norm(this.controller.getDeviationFromRefForState(states(:, i), timesteps(i)));
+                   %trackingError = trackingError + norm(this.controller.getDeviationFromRefForState(states(:, i), timesteps(i)));
+                   trackingError = trackingError + weights(i) * norm(this.controller.getDeviationFromRefForState(states(:, i), timesteps(i)));
+                   %samples(i) = norm(this.controller.getDeviationFromRefForState(states(:, i), timesteps(i)));
                 end
+                %trackingError = trackingError / numel(timesteps);                                     
             end
             
         end
@@ -720,7 +870,7 @@ classdef NcsController < handle
         %% constructDoStepFun
         function fun = constructDoStepFun(this)
             switch metaclass(this.controller)
-                case {?IMMBasedRecedingHorizonController}       
+                case {?IMMBasedRecedingHorizonController}
                     fun = @computeGetState;
                 otherwise
                     fun = @getStateCompute;
@@ -728,14 +878,14 @@ classdef NcsController < handle
             
             function [state, input, numUsedMeas, numDiscardedMeas] = getStateCompute(measurements, measDelays, modeObservations, modeDelays)
                 % retrieve state before sequence is computed
-                state = this.controller.getControllerPlantState();
+                state = this.getControllerState();
                 input = this.reshapeInputSequence(this.controller.computeControlSequence(measurements, measDelays, modeObservations, modeDelays));
                 [numUsedMeas, numDiscardedMeas] = this.controller.getLastComputationMeasurementData();
             end
             function [state, input, numUsedMeas, numDiscardedMeas] = computeGetState(measurements, measDelays, modeObservations, modeDelays)
                 input = this.reshapeInputSequence(this.controller.computeControlSequence(measurements, measDelays, modeObservations, modeDelays));
                 % retrieve state after sequence is computed
-                state = this.controller.getControllerPlantState();
+                state = this.getControllerState();
                 [numUsedMeas, numDiscardedMeas] = this.controller.getLastComputationMeasurementData();
             end            
         end

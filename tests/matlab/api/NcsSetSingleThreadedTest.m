@@ -1,13 +1,13 @@
 classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             'libncs_matlab/matlab', 'IncludingSubfolders', true)}) ...
-        NcsPktGetSrcAddrTest < matlab.unittest.TestCase
-    % Test cases for the api function ncs_pktGetSrcAddr.
+        NcsSetSingleThreadedTest < matlab.unittest.TestCase
+   % Test cases for the api function ncs_setSingleThreaded.
     
     % >> This function/class is part of CoCPN-Sim
     %
     %    For more information, see https://github.com/spp1914-cocpn/cocpn-sim
     %
-    %    Copyright (C) 2018-2021  Florian Rosenthal <florian.rosenthal@kit.edu>
+    %    Copyright (C) 2018-2021 Florian Rosenthal <florian.rosenthal@kit.edu>
     %
     %                        Institute for Anthropomatics and Robotics
     %                        Chair for Intelligent Sensor-Actuator-Systems (ISAS)
@@ -27,40 +27,30 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
     %
     %    You should have received a copy of the GNU General Public License
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
-        
-    properties (Access = private)
-        dataPacket;
-        
-        payload;
-        timestamp;
-        id;
-        sourceAddress;
-        expectedTranslatedSourceAddress;
-    end
     
-     methods (TestMethodSetup)
+    properties (Access = private)
+        numThreads;
+    end
+        
+    methods (TestMethodSetup)
         %% init
         function init(this)
-            this.payload = [1 2 3]';
-            this.timestamp = 10;
-            this.id = 1;
-            this.sourceAddress = 2;
-            this.expectedTranslatedSourceAddress = this.sourceAddress - 1;
+            this.numThreads = maxNumCompThreads();
             
-            this.dataPacket = DataPacket(this.payload, this.timestamp, this.id); 
-            this.dataPacket.sourceAddress = this.sourceAddress;
-        end
-     end
+            % reset
+            this.addTeardown(@() maxNumCompThreads(this.numThreads));
+        end       
+    end
     
-    methods (Test)        
+    methods (Test)
         %% test
-        function test(this)
-            import matlab.unittest.constraints.IsScalar
-            actualTranslatedSourceAddress = ncs_pktGetSrcAddr(this.dataPacket);
+        function test(this)            
+            this.verifyEqual(ncs_setSingleThreaded(), this.numThreads);
             
-            this.verifyThat(actualTranslatedSourceAddress, IsScalar);
-            this.verifyGreaterThanOrEqual(actualTranslatedSourceAddress, 0);
-            this.verifyEqual(actualTranslatedSourceAddress, this.expectedTranslatedSourceAddress);
+            % check the side effect
+            this.verifyEqual(maxNumCompThreads(), 1);
+            % second call should have no effect
+            this.verifyEqual(ncs_setSingleThreaded(), 1);
         end
     end
 end
