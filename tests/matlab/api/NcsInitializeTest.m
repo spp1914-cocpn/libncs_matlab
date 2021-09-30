@@ -834,7 +834,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             this.configStruct.linearizationPoint = expectedPlantStateOrigin;
             this.configStruct.plant = pendulumCopyNoNoise;
             this.configStruct.W = expectedWcontLin; % inject the noise into the config here (for the linearization)
-            this.configStruct.usePlantNoise = false; % plant to be simulated withut noise
+            this.configStruct.usePlantNoise = false; % plant to be simulated without noise
             this.configStruct.initialPlantState = zeros(4, 1); % initial pendulum state
             
             this.configStruct.controllerClassName = 'NominalPredictiveController';
@@ -887,7 +887,185 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             this.verifyEqual(measNoiseMean, zeros(2, 1));
             this.verifyEqual(measNoiseCov, this.configStruct.V);
         end
+%%
+%%
+        %% testPlantDoublePendulum
+        function testPlantDoublePendulum(this)
+            dimPend = 6;
+            dimW = 3;
+            dimV = 3;
+            expectedSamplingInterval = this.samplingInterval / 2;
+            expectedPlantSamplingInterval = this.samplingInterval / 2;
+            expectedWcontLin = blkdiag(0.1, 0.5, 0.2); % noise in the continuous-time linearization
+            expectedPendNoiseCov = gallery('moler', dimW); % noise cov (nonlinear pendulum dynamics)
+                        
+            pendulum = DoubleInvertedPendulum(1, 1, 1, 1, 1, 0.1, 0.1, this.samplingInterval);
+            pendulum.varDisturbanceForcePendulum1ContLin = expectedWcontLin(1, 1);
+            pendulum.varDisturbanceForcePendulum2ContLin = expectedWcontLin(2, 2);
+            pendulum.varDisturbanceForceActuatorContLin = expectedWcontLin(3, 3);
+            pendulumCopyNoNoise = DoubleInvertedPendulum(1, 1, 1, 1, 1, 0.1, 0.1, this.samplingInterval);
+            
+            expectedPlantStateOrigin = [0 0 0 0 0 0]'; % pendulum state is 6-dimensional
+            
+            [A_d, B_d, C_d, ~] = pendulum.linearizeAroundUpwardEquilibrium(); % discrete time matrices
+            [expA, expB, expC, ~] = pendulum.linearizeAroundUpwardEquilibrium(expectedSamplingInterval);
+                                           
+            this.configStruct.A = A_d;
+            this.configStruct.B = B_d;
+            this.configStruct.C = C_d;            
+            this.configStruct.V = eye(dimV); % three-dimensional measurements
+            this.configStruct.samplingInterval = expectedSamplingInterval;
+            this.configStruct.plantSamplingInterval = expectedPlantSamplingInterval;
+            this.configStruct.Q = eye(dimPend);
+            this.configStruct.R = 100;
+            this.configStruct.linearizationPoint = expectedPlantStateOrigin;
+            this.configStruct.plant = pendulumCopyNoNoise;
+            this.configStruct.W = expectedWcontLin; % inject the noise into the config here (for the linearization)
+            this.configStruct.W_plant = expectedPendNoiseCov; % for the nonlinear dynamics
+            this.configStruct.initialPlantState = zeros(dimPend, 1); % initial pendulum state
+            
+            this.configStruct.controllerClassName = 'NominalPredictiveController';
+            this.configStruct.filterClassName = 'DelayedKF';
+            this.configStruct.initialEstimate = Gaussian(zeros(dimPend, 1), eye(dimPend));
+            expectedGain = -dlqr(expA, expB, this.configStruct.Q, this.configStruct.R);
+                        
+            ncsHandle = ncs_initialize(this.maxSimTime, this.id, this.configStruct, this.matFilename);
+            
+            ncs = ComponentMap.getInstance().getComponent(ncsHandle);            
+            this.verifyClass(ncs, ?NetworkedControlSystem);
+            
+            % check some params of the contructed NCS
+            this.verifyEqual(ncs.networkType, NetworkType.UdpLikeWithAcks);            
+            this.verifyEqual(ncs.name, this.id);
+            this.verifyEqual(ncs.samplingInterval, expectedSamplingInterval);
+            this.verifyEqual(ncs.plantSamplingInterval, expectedPlantSamplingInterval);
+            
+            this.verifyClass(ncs.controller, ?NcsControllerWithFilter);
+            this.verifyClass(ncs.controller.controller, ?NominalPredictiveController);
+            this.verifyEqual(ncs.controller.controller.L, expectedGain, 'AbsTol', 1e-8);
+            this.verifyEqual(ncs.controlSequenceLength, this.controlSeqLength)
+            
+            % check if the filter uses the correct model (linearized dynamics) incl. noise
+            [A_cont, ~, ~, G_cont, ~] = pendulum.linearizeAroundUpwardEquilibriumCont();
+            expectedWdisc = integral(@(x) expm(A_cont*x) * G_cont * expectedWcontLin * G_cont' * expm(A_cont'*x), ...
+                    0, expectedPlantSamplingInterval, 'ArrayValued', true);  
+            this.verifyClass(ncs.controller.plantModel, ?LinearPlant);
+            this.verifyEqual(ncs.controller.plantModel.sysMatrix, expA);
+            this.verifyEqual(ncs.controller.plantModel.inputMatrix, expB);
+            this.verifyClass(ncs.controller.plantModel.noise, ?Gaussian);
+            [filterNoiseMean, filterNoiseCov] = ncs.controller.plantModel.noise.getMeanAndCov();
+            this.verifyEqual(filterNoiseMean, zeros(dimPend,1));
+            this.verifyEqual(filterNoiseCov, expectedWdisc, 'AbsTol', 1e-8);
+            
+            % check the plant (inverted pendulum)
+            this.verifyClass(ncs.plant, ?NcsPlant);
+            this.verifyClass(ncs.plant.plant, ?DoubleInvertedPendulum);
+            this.verifyEqual(ncs.plant.plant.samplingInterval, expectedPlantSamplingInterval);
+            this.verifyEqual(ncs.plant.plant.varDisturbanceForcePendulum1ContLin, expectedWcontLin(1,1)); % noise affecting lower pendulum rod in the continuous-time linearization
+            this.verifyEqual(ncs.plant.plant.varDisturbanceForcePendulum2ContLin, expectedWcontLin(2,2)); % noise affecting upper pendulum rod in the continuous-time linearization
+            this.verifyEqual(ncs.plant.plant.varDisturbanceForceActuatorContLin, expectedWcontLin(3,3)); % noise affecting cart in the continuous-time linearization
+            % three dimensional noise
+            this.verifyClass(ncs.plant.plant.noise, ?Gaussian);            
+            [plantNoiseMean, plantNoiseCov] = ncs.plant.plant.noise.getMeanAndCov();
+            this.verifyEqual(plantNoiseMean, zeros(dimW, 1));
+            this.verifyEqual(plantNoiseCov, expectedPendNoiseCov);
+            
+            % finally, check the measurement model assumed by the controller/filter
+            this.verifyClass(ncs.controller.measModel, ?LinearMeasurementModel);
+            this.verifyEqual(ncs.controller.measModel.measMatrix, expC);
+            this.verifyClass(ncs.controller.measModel.noise, ?Gaussian);
+            [measNoiseMean, measNoiseCov] = ncs.controller.measModel.noise.getMeanAndCov();
+            this.verifyEqual(measNoiseMean, zeros(dimV, 1));
+            this.verifyEqual(measNoiseCov, this.configStruct.V);
+        end
         
+        %% testPlantDoublePendulumNoProcessNoise
+        function testPlantDoublePendulumNoProcessNoise(this)
+            dimPend = 6;            
+            dimV = 3;
+            
+            expectedSamplingInterval = this.samplingInterval / 2;
+            expectedPlantSamplingInterval = this.samplingInterval / 2;
+            expectedWcontLin = blkdiag(0.1, 0.5, 0.2); % noise in the continuous-time linearization                      
+            
+            pendulum = DoubleInvertedPendulum(1, 1, 1, 1, 1, 0.1, 0.1, this.samplingInterval);
+            pendulum.varDisturbanceForcePendulum1ContLin = expectedWcontLin(1, 1);
+            pendulum.varDisturbanceForcePendulum2ContLin = expectedWcontLin(2, 2);
+            pendulum.varDisturbanceForceActuatorContLin = expectedWcontLin(3, 3);
+            pendulumCopyNoNoise = DoubleInvertedPendulum(1, 1, 1, 1, 1, 0.1, 0.1, this.samplingInterval);
+            
+            expectedPlantStateOrigin = zeros(dimPend, 1); % pendulum state is d-dimensional
+            
+            [A_d, B_d, C_d, ~] = pendulum.linearizeAroundUpwardEquilibrium(); % discrete time matrices
+            [expA, expB, expC, ~] = pendulum.linearizeAroundUpwardEquilibrium(expectedSamplingInterval);
+                                           
+            this.configStruct.A = A_d;
+            this.configStruct.B = B_d;
+            this.configStruct.C = C_d;            
+            this.configStruct.V = eye(dimV); % two-dimensional measurements
+            this.configStruct.samplingInterval = expectedSamplingInterval;
+            this.configStruct.plantSamplingInterval = expectedPlantSamplingInterval;
+            this.configStruct.Q = eye(dimPend);
+            this.configStruct.R = 100;
+            this.configStruct.linearizationPoint = expectedPlantStateOrigin;
+            this.configStruct.plant = pendulumCopyNoNoise;
+            this.configStruct.W = expectedWcontLin; % inject the noise into the config here (for the linearization)
+            this.configStruct.usePlantNoise = false; % plant to be simulated without noise
+            this.configStruct.initialPlantState = zeros(dimPend, 1); % initial pendulum state
+            
+            this.configStruct.controllerClassName = 'NominalPredictiveController';
+            this.configStruct.filterClassName = 'DelayedKF';
+            this.configStruct.initialEstimate = Gaussian(zeros(dimPend, 1), eye(dimPend));
+            expectedGain = -dlqr(expA, expB, this.configStruct.Q, this.configStruct.R);            
+            
+            ncsHandle = ncs_initialize(this.maxSimTime, this.id, this.configStruct, this.matFilename);
+            
+            ncs = ComponentMap.getInstance().getComponent(ncsHandle);            
+            this.verifyClass(ncs, ?NetworkedControlSystem);
+            
+            % check some params of the contructed NCS
+            this.verifyEqual(ncs.networkType, NetworkType.UdpLikeWithAcks);            
+            this.verifyEqual(ncs.name, this.id);
+            this.verifyEqual(ncs.samplingInterval, expectedSamplingInterval);
+            this.verifyEqual(ncs.plantSamplingInterval, expectedPlantSamplingInterval);
+            
+            this.verifyClass(ncs.controller, ?NcsControllerWithFilter);
+            this.verifyClass(ncs.controller.controller, ?NominalPredictiveController);
+            this.verifyEqual(ncs.controller.controller.L, expectedGain, 'AbsTol', 1e-8);
+            this.verifyEqual(ncs.controlSequenceLength, this.controlSeqLength)
+            
+            % check if the filter uses the correct model (linearized dynamics) incl. noise
+            [A_cont, ~, ~, G_cont, ~] = pendulum.linearizeAroundUpwardEquilibriumCont();
+            expectedWdisc = integral(@(x) expm(A_cont*x) * G_cont * expectedWcontLin * G_cont' * expm(A_cont'*x), ...
+                    0, expectedPlantSamplingInterval, 'ArrayValued', true);  
+            this.verifyClass(ncs.controller.plantModel, ?LinearPlant);
+            this.verifyEqual(ncs.controller.plantModel.sysMatrix, expA);
+            this.verifyEqual(ncs.controller.plantModel.inputMatrix, expB);
+            this.verifyClass(ncs.controller.plantModel.noise, ?Gaussian);
+            [filterNoiseMean, filterNoiseCov] = ncs.controller.plantModel.noise.getMeanAndCov();
+            this.verifyEqual(filterNoiseMean, zeros(dimPend,1));
+            this.verifyEqual(filterNoiseCov, expectedWdisc, 'AbsTol', 1e-8);
+            
+            % plant is simulated without noise
+            this.verifyClass(ncs.plant, ?NcsPlant);
+            this.verifyClass(ncs.plant.plant, ?DoubleInvertedPendulum);
+            this.verifyEqual(ncs.plant.plant.samplingInterval, expectedPlantSamplingInterval);
+            this.verifyEmpty(ncs.plant.plant.noise);
+            % buth the linearization has noise
+            this.verifyEqual(ncs.plant.plant.varDisturbanceForcePendulum1ContLin, expectedWcontLin(1,1)); % noise affecting lower pendulum rod in the continuous-time linearization
+            this.verifyEqual(ncs.plant.plant.varDisturbanceForcePendulum2ContLin, expectedWcontLin(2,2)); % noise affecting upper pendulum rod in the continuous-time linearization
+            this.verifyEqual(ncs.plant.plant.varDisturbanceForceActuatorContLin, expectedWcontLin(3,3)); % noise affecting cart in the continuous-time linearization
+                        
+            % finally, check the measurement model assumed by the controller/filter
+            this.verifyClass(ncs.controller.measModel, ?LinearMeasurementModel);
+            this.verifyEqual(ncs.controller.measModel.measMatrix, expC);
+            this.verifyClass(ncs.controller.measModel.noise, ?Gaussian);
+            [measNoiseMean, measNoiseCov] = ncs.controller.measModel.noise.getMeanAndCov();
+            this.verifyEqual(measNoiseMean, zeros(dimV, 1));
+            this.verifyEqual(measNoiseCov, this.configStruct.V);
+        end
+%%        
+%%        
         %% testNcsTranslatorFromFile
         function testNcsTranslatorFromFile(this)        
             % mat file is existing

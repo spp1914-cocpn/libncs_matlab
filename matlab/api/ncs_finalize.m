@@ -23,16 +23,26 @@ function [costs, controllerStats, plantStats] = ncs_finalize(ncsHandle)
     %     -controllerTimes (Row vector of nonnegative scalars), the i-th
     %     entry indicates the simulation time (in seconds) corresponding to
     %     the i-th controller time step
+    %     -trueModes (Row vector of positive integers within [1, N+1]), where N is the employed sequence length indicating the the
+    %     active mode theta_k (one-based) in the augmented dynamical system (MJLS) describing plant and
+    %     actuator; value=i, i=1,..,N, equals age-1 of the used sequence, and value=N+1 indicates application of default input
     %
     %   << plantStats (Struct)
     %     Struct containing plant-related data gathered during the execution
     %     of the control task. At least the following fields are present:
     %     -appliedInputs (Matrix), 
-    %     containing the actually applied control inputs per time step (time step w.r.t
+    %     containing the actually applied control inputs u per time step (time step w.r.t
     %     plant sampling rate)
     %     -trueStates (Matrix), 
-    %     containing the true plant states per time step (time step w.r.t
-    %     plant sampling rate)  
+    %     containing the true plant states x per time step (time step w.r.t
+    %     plant sampling rate)
+    %     
+    %     If the task was to stabilize a double inverted pendulum (i.e.,
+    %     the plant was DoubleInvertedPendulum instance), additionally the
+    %     following field is present:
+    %     -trueStateNorms (Row vector of nonnegative scalars), the i-th
+    %     entry indicates the Euclidean norm ||x|| of the true plant state x
+    %     at time step i (time step w.r.t plant sampling rate)
     %    
     % Literature: 
     %  	Florian Rosenthal, Markus Jung, Martina Zitterbart, and Uwe D. Hanebeck,
@@ -67,9 +77,13 @@ function [costs, controllerStats, plantStats] = ncs_finalize(ncsHandle)
     controllerStats.numDiscardedControlSequences = ncsStats.numDiscardedControlSequences;        
     controllerStats.controllerStates = ncsStats.controllerStates;
     controllerStats.controllerTimes = ncsStats.times'; % transpose into row vector
+    controllerStats.trueModes = ncsStats.trueModes;
     
     plantStats.trueStates = ncsStats.trueStates;
     plantStats.appliedInputs = ncsStats.appliedInputs;
+    if isfield(ncsStats, 'trueStateNorms')
+        plantStats.trueStateNorms = ncsStats.trueStateNorms;
+    end
       
     ComponentMap.getInstance().removeComponentByIndex(ncsHandle);
 end

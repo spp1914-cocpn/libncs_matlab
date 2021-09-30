@@ -35,6 +35,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
         V;
         measModel;
         ncsSensorUnderTest;
+        noiseSamples;
     end
     
     methods (TestMethodSetup)
@@ -45,16 +46,22 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             this.C = [1 2 3];
             this.V = 0.1^2; % variance of the meas noise
      
+            rng(1); % seed, for repeatability
+            maxSensorSteps = 1000;
+            measNoise = Gaussian(0, this.V);
+            this.noiseSamples = measNoise.drawRndSamples(maxSensorSteps);
+            
+            rng(1); % seed, for repeatability
             this.measModel = LinearMeasurementModel(this.C);
-            this.measModel.setNoise(Gaussian(0, this.V));
-            this.ncsSensorUnderTest = NcsSensor(this.measModel);
+            this.measModel.setNoise(measNoise);
+            this.ncsSensorUnderTest = NcsSensor(this.measModel, maxSensorSteps);
         end
     end
     
     methods (Test)
         %% testNcsSensor
         function testNcsSensor(this)
-            ncsSensor = NcsSensor(this.measModel);
+            ncsSensor = NcsSensor(this.measModel, 100);
             
             this.verifyFalse(ncsSensor.isEventBased);
         end
@@ -64,30 +71,31 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
         function testStep(this)
             import matlab.unittest.constraints.IsScalar;
             plantState = [2 3 4]';
+            detMeasurement = this.C * plantState;
             timestep = 1;
-            
-            rng(1); % seed
+         
             measurementPacket = this.ncsSensorUnderTest.step(timestep, plantState);
             
             this.verifyNotEmpty(measurementPacket);
             this.verifyClass(measurementPacket, ?DataPacket);
             measurement = measurementPacket.payload;
-            % we can only verify that the measurement is a scalar
+            % verify measurement
             this.verifyThat(measurement, IsScalar);
+            this.verifyEqual(measurement,  detMeasurement + this.noiseSamples(:, timestep));
             % check timestep, source (id=3) and destination (id=2) of
             % packet
             this.verifyEqual(measurementPacket.timeStamp, timestep)
             this.verifyEqual(measurementPacket.sourceAddress, 3)
             this.verifyEqual(measurementPacket.destinationAddress, 2)
             
-            % take a measurement for the same plant state again
-            % and use the same seed to obtain the same measurement
-            rng(1);
+            % take a measurement for a different time step but the same state    
+            timestep = 999;
             measurementPacket2 = this.ncsSensorUnderTest.step(timestep, plantState);
             this.verifyNotEmpty(measurementPacket2);
-            this.verifyEqual(measurementPacket.timeStamp, timestep)
-            this.verifyEqual(measurementPacket.sourceAddress, 3)
-            this.verifyEqual(measurementPacket.destinationAddress, 2)
+            this.verifyEqual(measurementPacket2.payload,  detMeasurement + this.noiseSamples(:, timestep));
+            this.verifyEqual(measurementPacket2.timeStamp, timestep)
+            this.verifyEqual(measurementPacket2.sourceAddress, 3)
+            this.verifyEqual(measurementPacket2.destinationAddress, 2)
         end
     end
 end

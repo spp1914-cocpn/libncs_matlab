@@ -36,6 +36,8 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
         measModel;
         ncsSensorUnderTest;
         defaultMeasDelta;
+        
+        noiseSamples;
     end
     
     methods (Access = private)
@@ -54,17 +56,23 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             this.V = 0.1^2; % variance of the meas noise
             this.defaultMeasDelta = 2;
      
-            this.measModel = LinearMeasurementModel(this.C);
-            this.measModel.setNoise(Gaussian(0, this.V));
+            rng(10); % seed, for repeatability
+            maxSensorSteps = 1000;
+            measNoise = Gaussian(0, this.V);
+            this.noiseSamples = measNoise.drawRndSamples(maxSensorSteps);
             
-            this.ncsSensorUnderTest = EventBasedNcsSensor(this.measModel, this.defaultMeasDelta);
+            rng(10); % seed, for repeatability
+            this.measModel = LinearMeasurementModel(this.C);
+            this.measModel.setNoise(measNoise);
+            
+            this.ncsSensorUnderTest = EventBasedNcsSensor(this.measModel, maxSensorSteps, this.defaultMeasDelta);
         end
     end
     
     methods (Test)
         %% testEventBasedNcsSensor
         function testEventBasedNcsSensor(this)
-            ncsSensor = EventBasedNcsSensor(this.measModel);
+            ncsSensor = EventBasedNcsSensor(this.measModel, 100);
             % the default setting of the class
             this.verifyEqual(ncsSensor.measurementDelta, 10);
             this.verifyTrue(ncsSensor.isEventBased);
@@ -95,17 +103,18 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
         function testStep(this)
             import matlab.unittest.constraints.IsScalar;
             plantState = [2 3 4]';
+            detMeasurement = this.C * plantState;
             timestep = 1;
             this.assertEqual(this.ncsSensorUnderTest.measurementDelta, this.defaultMeasDelta);
             
-            rng(1); % seed
             measurementPacket = this.ncsSensorUnderTest.step(timestep, plantState);
             
             this.verifyNotEmpty(measurementPacket);
             this.verifyClass(measurementPacket, ?DataPacket);
             measurement = measurementPacket.payload;
-            % we can only verify that the measurement is a scalar
+            % verify measurement
             this.verifyThat(measurement, IsScalar);
+            this.verifyEqual(measurement,  detMeasurement + this.noiseSamples(:, timestep));
             % check timestep, source (id=3) and destination (id=2) of
             % packet
             this.verifyEqual(measurementPacket.timeStamp, timestep)
@@ -114,11 +123,10 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             
             % take a measurement for the same plant state again
             % and use the same seed to obtain the same measurement
-            rng(1);
+            timestep = timestep + 1;
             measurementPacket2 = this.ncsSensorUnderTest.step(timestep, plantState);
             this.verifyEmpty(measurementPacket2);
         end
-    end
-    
+    end    
 end
 

@@ -39,7 +39,7 @@ classdef NcsPlant < handle
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
     
     properties (SetAccess = immutable, GetAccess = protected)         
-         actuator BufferingActuator;
+         actuator;% BufferingActuator
     end
     
     properties(Access = private)
@@ -53,7 +53,7 @@ classdef NcsPlant < handle
     end
     
     properties (SetAccess = immutable, GetAccess = public)
-       plant SystemModel = LinearSystemModel; % LinearPlant or NonlinearPlant usually 
+       plant; % SystemModel, LinearPlant or NonlinearPlant usually 
     end
        
     properties (GetAccess = public, Dependent)
@@ -77,15 +77,20 @@ classdef NcsPlant < handle
             % Class constructor.
             %
             % Parameters:
-            %   >> plant (LinearPlant instance)
-            %      The plant to be controlled.
+            %   >> plant (SystemModel instance)
+            %      The plant to be controlled, usually a LinearPlant or a NonlinearPlant.
             %
             %   >> actuator (BufferingActuator instance)
             %      The actuator in the NCS which applies inputs to the plant.
             %
             % Returns:
-            %   << this (NcsSensor)
+            %   << this (NcsPlant)
             %      A new NcsPlant instance.
+            
+            arguments
+                plant (1,1) SystemModel
+                actuator (1,1) BufferingActuator
+            end
             
             this.plant = plant;
             this.actuator = actuator;
@@ -249,7 +254,7 @@ classdef NcsPlant < handle
         end
         
         %% getStatistics
-        function stats = getStatistics(this, numPlantSteps)
+        function stats = getStatistics(this, numPlantSteps, includeStateNorms)
             % Get the statistical data that has been recorded during a
             % simulation comprised of the given number of plant steps.
             %
@@ -264,6 +269,13 @@ classdef NcsPlant < handle
             %   >> numPlantSteps (Positive integer)
             %      The number of plant time steps carried out during
             %      simulation.
+            %
+            %   >> includeStateNorms (Flag, i.e. logical scalar, optional)
+            %      Flag to indicate whether the Euclidean norm of the plant
+            %      states shall be included.
+            %      That is, if true is passed, for each plant state x_k,
+            %      ||x_k|| will be provided.
+            %      If left out, the default value false is used.
             %
             % Returns:
             %   << statistics (Struct)
@@ -284,7 +296,12 @@ classdef NcsPlant < handle
             % indicating that ncs is not simulated over the whole simulation time) 
             stats.trueStates = this.statistics.trueStates(:, 1:numPlantSteps + 1);
             stats.appliedInputs = this.statistics.appliedInputs(:, 1:numPlantSteps);
-                                 
+            
+            % for convenience, also provide norms of the plant states, if requested
+            if nargin > 2 && includeStateNorms
+                stats.trueStateNorms = vecnorm(stats.trueStates);
+            end
+                        
             info = squeeze(this.statistics.info.Data);
             % corner case: No data have been recorded yet
             if isempty(info)

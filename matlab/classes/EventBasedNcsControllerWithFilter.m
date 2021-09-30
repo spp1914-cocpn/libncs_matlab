@@ -55,12 +55,14 @@ classdef EventBasedNcsControllerWithFilter < NcsControllerWithFilter
     
     properties (SetAccess = immutable, GetAccess = private)
         canUpdateEtaState;
+        samplingInterval;
     end  
     
     methods (Access = public)
         %% EventBasedNcsControllerWithFilter
-        function this = EventBasedNcsControllerWithFilter(controller, filter, plantModel, measModel, defaultInput, initialCaDelayProbs, plantStateOrigin)
-             % Class constructor.
+        function this = EventBasedNcsControllerWithFilter(controller, filter, plantModel, measModel, defaultInput, ...
+                initialCaDelayProbs, controllerSamplingInterval, plantStateOrigin)
+            % Class constructor.
             %
             % Parameters:
             %   >> controller (SequenceBasedController instance)
@@ -90,6 +92,10 @@ classdef EventBasedNcsControllerWithFilter < NcsControllerWithFilter
             %      CA-network initially assumed/used by the given
             %      controller and/or filter.
             %
+            %   >> controllerSamplingInterval (Positive Scalar)
+            %      A positive scalar denoting the fixed sampling interval (in
+            %      seconds) of the controller.
+            %
             %   >> plantStateOrigin (Vector, optional)
             %      The origin in plant state variables expressed in terms of
             %      the state variables used by the controller, e.g., the
@@ -105,13 +111,14 @@ classdef EventBasedNcsControllerWithFilter < NcsControllerWithFilter
             %      A new EventBasedNcsControllerWithFilter instance.
             %
             
-            if nargin == 6
+            if nargin == 7
                 plantStateOrigin = [];
             end
             this = this@NcsControllerWithFilter(controller, filter, plantModel, measModel, defaultInput, ...
                 initialCaDelayProbs, plantStateOrigin);
             this.isEventBased = true;
             this.canUpdateEtaState = ismethod(this.controller, 'setEtaState');
+            this.samplingInterval = controllerSamplingInterval;
         end
     end    
     
@@ -130,8 +137,8 @@ classdef EventBasedNcsControllerWithFilter < NcsControllerWithFilter
         function dataPacket = postDoStep(this, inputSequence, controllerState, timestep)
             sendData.state = controllerState; % with respect to the plant coordinates
             sendData.sequence = inputSequence;
-            sendData.timestep = timestep;
-            sendData.error = this.getCurrentControlError(timestep); % control error, perceived by the controller
+            sendData.timestep = timestep;            
+            sendData.error = this.getCurrentControlError(timestep, timestep * this.samplingInterval); % control error, perceived by the controller
             sendData.stageCosts = this.getCurrentStageCosts(sendData.state, ...
                     inputSequence(:, 1), timestep); % stage costs if first element of sequence was applied 
             % finally, create the data packet, if sequence shall be send           

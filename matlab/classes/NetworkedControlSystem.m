@@ -53,7 +53,7 @@ classdef NetworkedControlSystem < handle
     end
     
     properties (Access = private)        
-        translator NcsTranslator;
+        translator; % NcsTranslator
         lastPlantInvocationTime; % stores the last point in time (in pico-seconds) the plant was triggered from Omnet
         lastControllerInvocationTime; % stores the last point in (in pico-seconds) the controller/actuator was triggered from Omnet
         lastControllerTimestep = 0; % store the time step corresponding to the last invocation time, needed to keep track of since controller can adapt sampling rate
@@ -96,7 +96,7 @@ classdef NetworkedControlSystem < handle
             %   >> plant (NcsPlant)
             %      The plant of the NCS.
             %
-            %   >> plant (NcsSensor)
+            %   >> sensor (NcsSensor)
             %      The sensor of the NCS.
             %
             %   >> name
@@ -118,7 +118,7 @@ classdef NetworkedControlSystem < handle
             %
             % Returns:
             %   << this (NetworkedControlSystem)
-            %      A new NetworkedControlSystem instance.
+            %      A new NetworkedControlSystem instance.         
             
             if nargin > 4
                 this.samplingInterval = samplingInterval;
@@ -139,6 +139,16 @@ classdef NetworkedControlSystem < handle
         
         %% attachTranslator
         function attachTranslator(this, translator)
+            % Set the CoCPN-Translator for this NCS.
+            %
+            % Parameters:
+            %   >> translator (NcsTranslator)
+            %      The Translator specifying the communication properties of this NCS.
+            %            
+            arguments
+                this
+                translator (1,1) NcsTranslator
+            end
             this.translator = translator;
         end
         
@@ -298,7 +308,11 @@ classdef NetworkedControlSystem < handle
             %      The data recorded during the simulation run.
             %
             
-            statistics = this.plant.getStatistics(this.getPlantTimestep());
+            % for the double pendulum, also report the euclidean norm of
+            % the true states, for convenience
+            statistics = this.plant.getStatistics(this.getPlantTimestep(), ...
+                Checks.isClass(this.plant.plant, 'DoubleInvertedPendulum'));
+
             controllerStats = this.controller.getStatistics();            
             fields = fieldnames(controllerStats);
             for i=1:length(fields)
@@ -353,10 +367,7 @@ classdef NetworkedControlSystem < handle
                 end
                 % qoc is in unit interval [0,1]
                 actualQoc = this.translator.translateControlError(this.lastActualControlError);
-                estimatedQoc = this.translator.translateControlError(this.lastEstimatedControlError);      
-                
-%                 actualQoc = this.translator.estimateQoC(this.lastActualControlError);
-%                 estimatedQoc = this.translator.estimateQoC(this.lastEstimatedControlError);
+                estimatedQoc = this.translator.translateControlError(this.lastEstimatedControlError);
             end
         end
         
@@ -395,11 +406,7 @@ classdef NetworkedControlSystem < handle
             %      True in case the current plant state is admissible,
             %      false otherwise.
             
-            if isempty(this.lastPlantInvocationTime)
-                admissible = true;
-            else
-                admissible = this.plant.isStateAdmissible();
-            end
+            admissible = isempty(this.lastPlantInvocationTime) || this.plant.isStateAdmissible();
         end
         
         %% isControllerStateAdmissible
@@ -436,7 +443,14 @@ classdef NetworkedControlSystem < handle
         end
         
         %% plantStep
-        function plantStep(this, timestamp)     
+        function plantStep(this, timestamp)
+            % Execute a single time-triggered plant step.
+            %
+            % Parameters:
+            %   >> timestamp (Positive integer)
+            %      The current simulation time (in Omnet), in pico-seconds,
+            %      being an integer multiple of the plant sampling interval.
+            %           
             
             this.plant.plantStep(this.getPlantTimestep(timestamp), ConvertToSeconds(timestamp));              
             this.lastPlantInvocationTime = timestamp;
@@ -455,7 +469,7 @@ classdef NetworkedControlSystem < handle
             % Parameters:
             %   >> timestamp (Positive integer)
             %      The current simulation time (in Omnet), in pico-seconds,
-            %      being an integer multiple of the sampling interval.
+            %      being an integer multiple of the controller's current sampling interval.
             %     
             %   >> scPackets (Array of DataPackets, might be empty)
             %      An array of DataPackets containing measurements taken and transmitted from the sensor.

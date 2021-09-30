@@ -112,16 +112,16 @@ classdef NcsTranslator < handle
                 targetQoc double {mustBeGreaterThanOrEqual(targetQoc, 0), mustBeLessThanOrEqual(targetQoc, 1)}
             end
             
-            % so far, the curve is static
-            rate = this.qocRateCurve(targetQoc);
+            [n, m]=size(targetQoc);
                        
             %normalize rate: nonnegative and <= maxPossibleRate packets per second
-            rate = min(max(this.minAllowedRate, rate), this.maxPossibleRate);
-            
+            rate = min(max(this.minAllowedRate, this.qocRateCurve(targetQoc(:))), this.maxPossibleRate);
+            rate = reshape(rate, n, m);
             if nargout == 2
                 % differentiate with regards to targetQoC (i.e., partial
                 % derivative)
                 rateChange = differentiate(this.qocRateCurve, targetQoc);
+                rateChange = reshape(rateChange, n, m);
             end
         end
         
@@ -138,7 +138,7 @@ classdef NcsTranslator < handle
             %
             % Returns:
             %   << qoc (Nonnegative vector or matrix)
-            %      The QoC that can be achieved given a desired data rate,
+            %      The QoC in [0,1] that can be achieved given a desired data rate,
             %      computed based on the underlying communication characteristics of the NCS.
            
             arguments
@@ -147,7 +147,6 @@ classdef NcsTranslator < handle
             end
                         
             % we want the QoC value that can be achieved with the given rate
-            % when the current actual QoC is known
             qoc = zeros(size(targetRate));
             for j=1:numel(targetRate)
                 % so far, the curve is static, independent of actualQoC
@@ -176,9 +175,8 @@ classdef NcsTranslator < handle
             %
             % Returns:
             %   << qoc (Nonnegative vector or matrix)
-            %      The QoC values in [0, 1] corresponding to the given control errors.
+            %      The QoC values in [0,1] corresponding to the given control errors.
 
-            % vectorized
             arguments
                 this
                 controlErrors double {mustBeReal}
@@ -186,9 +184,10 @@ classdef NcsTranslator < handle
             
             % allow +/-inf and +/-nan
             controlErrors(~isfinite(controlErrors)) = inf;
-
+            [n, m]=size(controlErrors);
             % qoc is in unit interval [0,1]
-            qoc = min(1, max(arrayfun(@this.controlErrorQocCurve, controlErrors), 0));
+            qoc = min(1, max(this.controlErrorQocCurve(controlErrors(:)), 0));
+            qoc = reshape(qoc, n, m);
         end
     end
     

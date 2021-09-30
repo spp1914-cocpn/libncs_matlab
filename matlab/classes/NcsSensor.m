@@ -39,28 +39,45 @@ classdef NcsSensor < handle
     %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
     
     properties (SetAccess = immutable, GetAccess = protected)
-        sensor(1,1) LinearMeasurementModel;
+        sensor % (1,1) AdditiveNoiseMeasurementModel
+        sensorNoise; % for repeatability, draw in advance
     end
     
     properties(SetAccess = protected, GetAccess = public)
         % indicate whether sensor works event-based
         isEventBased(1,1) logical = false;
     end
-    
+        
     methods (Access = public)
         %% NcsSensor
-        function this = NcsSensor(sensorModel)
+        function this = NcsSensor(sensorModel, maxSensorSteps)
             % Class constructor.
             %
             % Parameters:
-            %   >> sensorModel (LinearMeasurementModel instance)
+            %   >> sensorModel (AdditiveNoiseMeasurementModel instance)
             %      The measurement model to be utilized by the sensor.
+            %
+            %   >> maxSensorSteps (Positive integer)
+            %      A positive integer denoting the maximum number of sensor invocations to be carried out during the simulation.
+            %
+            %      Note: The actual number of sensor invocations/steps carried out during a
+            %      simulation can be smaller than specified by this parameter because an NCS can be finished
+            %      prematurely (e.g., due to errors at runtime), event-based communication, varying sampling rates of controller and sensor,
+            %      or a parameter in an Omnet ini-file indicating that an NCS should not be
+            %      active over the whole simulation time.
             %
             % Returns:
             %   << this (NcsSensor)
             %      A new NcsSensor instance.
+
+            arguments
+               sensorModel (1,1) AdditiveNoiseMeasurementModel
+               maxSensorSteps (1,1) double {mustBePositive, mustBeInteger}
+            end
             
             this.sensor = sensorModel;           
+            % draw all sensor noises in advance, for repeatability
+            this.sensorNoise = this.sensor.noise.drawRndSamples(maxSensorSteps);
         end
         
         %% step
@@ -70,9 +87,9 @@ classdef NcsSensor < handle
             %
             % Parameters:
             %   >> timestep (Positive integer)
-            %      The current time step, i.e., the integer yielding the
-            %      current simulation time (in s) when multiplied by the
-            %      loop's sampling interval.
+            %      The current time step, the integer yielding the
+            %      current simulation time (in seconds) when multiplied by the
+            %      loop's sampling interval in case the sampling interval is fixed.
             %
             %   >> plantState (Vector)
             %      The true state of the plant.
@@ -81,10 +98,10 @@ classdef NcsSensor < handle
             %   << dataPacket (DataPacket or empty matrix)
             %      The data packet containing the measurement (as column vector) to be transmitted to the controller.
             %      Empty matrix is returned in case none is taken.
-            %
             
             % take a measurement y_k and create packet
-            dataPacket = NcsSensor.createDataPacket(this.sensor.simulate(plantState), timestep);
+            dataPacket = NcsSensor.createDataPacket(...
+                this.sensor.measurementEquation(plantState) + this.sensorNoise(:, timestep), timestep);
         end
     end
     

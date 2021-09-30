@@ -287,16 +287,11 @@ classdef NcsControllerWithFilter < NcsController
         
         %% doChangeModelParameters
         function doChangeModelParameters(this, newA, newB, newW)            
-            % only supported for scenarios where inverted pendulum is to be
-            % stabilized
             switch metaclass(this.plantModel) % the plant models used by the filter must be updated
-                case ?JumpLinearSystemModel
-                    sysModels = this.plantModel.modeSystemModels;
+                case ?JumpLinearSystemModel                    
                     for j=1:this.controlSequenceLength + 1
                         % change the affected parameters of the model
-                        sysModels{j}.setSystemMatrix(newA);
-                        sysModels{j}.setSystemInputMatrix(newB);
-                        sysModels{j}.setNoise(newW);
+                        this.plantModel.setSystemParametersForMode(newA, newB, newW, j);          
                     end
                 case ?LinearPlant
                     this.plantModel.setSystemMatrix(newA);

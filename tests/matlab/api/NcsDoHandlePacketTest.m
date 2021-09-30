@@ -72,7 +72,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             plant = LinearPlant(A, B, W);
             sensor = LinearMeasurementModel(C);
             sensor.setNoise(Gaussian(0, V));
-            sensorSubsystem = NcsSensor(sensor);
+            sensorSubsystem = NcsSensor(sensor, 10);
             
             filter = DelayedKF(maxMeasDelay, eye(3));
             filterPlantModel = LinearPlant(A, B, W);

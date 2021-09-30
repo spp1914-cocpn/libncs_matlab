@@ -129,10 +129,11 @@ function handle = ncs_initialize(maxSimTime, id, configStruct, filename)
             config.(name) = double(config.(name));
         end
     end
-        
+    
     % ensure that maxSimTime is always a double, so that ConvertToSeconds
     % can return a fractional value
     loopSteps = floor(ConvertToSeconds(double(maxSimTime)) / config.samplingInterval);
+    plantSteps = floor(ConvertToSeconds(double(maxSimTime)) / config.plantSamplingInterval);
     
     [plant, config] = initPlant(config);
     actuator = initActuator(config);
@@ -140,10 +141,10 @@ function handle = ncs_initialize(maxSimTime, id, configStruct, filename)
  
     sensor = initSensor(config);
     if getConfigValueOrDefault(config, 'sensorEventBased', false)
-        ncsSensor = EventBasedNcsSensor(sensor, ...
+        ncsSensor = EventBasedNcsSensor(sensor, plantSteps, ...
             getConfigValueOrDefault(config, 'sensorMeasDelta', EventBasedNcsSensor.defaultMeasurementDelta));            
     else
-        ncsSensor = NcsSensor(sensor);
+        ncsSensor = NcsSensor(sensor, plantSteps);
     end
     
     controller = initController(config, loopSteps);
@@ -208,7 +209,7 @@ function ncsControllerWithFilter = initNcsControllerWithFilter(config, controlle
         defaultLinearizationPoint = [];
         ncsControllerWithFilter = EventBasedNcsControllerWithFilter(controller, filter, ...
                 filterPlantModel, filterSensorModel, actuator.defaultInput, config.caDelayProbs, ...
-                getConfigValueOrDefault(config, 'linearizationPoint', defaultLinearizationPoint));
+                config.samplingInterval, getConfigValueOrDefault(config, 'linearizationPoint', defaultLinearizationPoint));
         
         % set the deadband if provided (else default value is used)
         ncsControllerWithFilter.deadband = getConfigValueOrDefault(config, 'controllerDeadband', ...
@@ -296,10 +297,10 @@ function [plant, configOut] = initPlant(configIn)
             % stored in the form of a (diagonal) 3-by-3 cov matrix
             % if the plant is to be simulated with noise
             if getConfigValueOrDefault(configIn, 'usePlantNoise', true)                
-                assert(isfield(configIn, 'W_pend'), ...
+                assert(isfield(configIn, 'W_plant'), ...
                     'ncs_initialize:DoublePendulumNoiseMissing', ...
-                    '** Variable <W_pend> must be present in the configuration since plant (inverted double pendulum) shall be simulated with noise **');
-                plant.setNoise(Gaussian([0 0 0]', configIn.W_pend));                 
+                    '** Variable <W_plant> must be present in the configuration since plant (inverted double pendulum) shall be simulated with noise **');
+                plant.setNoise(Gaussian([0 0 0]', configIn.W_plant));
             end
             % plant is simulated with sampling rate given in config
             plant.samplingInterval = configIn.plantSamplingInterval;
@@ -308,9 +309,9 @@ function [plant, configOut] = initPlant(configIn)
             % tacitly assume that W is diagonal (noise components are
             % independent) and at least either is non-zero (so that noise
             % covariance of discrete-time linearization is positive definite)
-            plant.varDisturbanceForcePendulum1ContLin = configIn.W(1,1);
-            plant.varDisturbanceForcePendulum2ContLin = configIn.W(2,2);
-            plant.varDisturbanceForceActuatorContLin = configIn.W(3,3);
+            plant.varDisturbanceForcePendulum1ContLin = configIn.W(1, 1);
+            plant.varDisturbanceForcePendulum2ContLin = configIn.W(2, 2);
+            plant.varDisturbanceForceActuatorContLin = configIn.W(3, 3);
             % obtain discretized and linearized model used by controller
             [configOut.A, configOut.B, configOut.C, configOut.W] ...
                 = plant.linearizeAroundUpwardEquilibrium(configIn.samplingInterval);
@@ -542,7 +543,7 @@ function controller = initController(config, horizonLength)
                 controllerHorizonLength = config.mpcHorizon;
             else
                 warning('ncs_initialize:InitController:RecedingHorizonUdpLikeController:NoHorizonLength', ...
-                    'Horizon length K for %s not specified, using K=%d (sequence length) ***', ...
+                    '** Horizon length K for %s not specified, using K=%d (sequence length) **', ...
                     'RecedingHorizonUdpLikeController', config.controlSequenceLength);
                 controllerHorizonLength = config.controlSequenceLength;
             end
@@ -554,8 +555,35 @@ function controller = initController(config, horizonLength)
                 transitionMatrixCa, scDelayProbs, config.controlSequenceLength, ...
                 config.maxMeasDelay, actualW, config.V, controllerHorizonLength, x0, x0Cov);
         case 'MSSController'
-            controllerDelta = 0.1; % to be promoted to configuration parameter
-            controller = MSSController(config.A, config.B, config.controlSequenceLength, controllerDelta);
+            controllerDelta = 0.05; % to be promoted to configuration parameter
+            assumeCorrDelays = false;
+            useLmiLab = false;
+            lazyInitGain = true;
+            controller = MSSController(config.A, config.B, config.controlSequenceLength, controllerDelta, ...
+                lazyInitGain, assumeCorrDelays, useLmiLab);
+%         case 'ResourceAwareRecedingHorizonController'
+%             [x0, x0Cov] = config.initialEstimate.getMeanAndCov();
+%             if isfield(config, 'mpcHorizon')
+%                 controllerHorizonLength = config.mpcHorizon;
+%             else
+%                 warning('ncs_initialize:InitController:ResourceAwareRecedingHorizonController:NoHorizonLength', ...
+%                     '** Horizon length K for %s not specified, using K=%d (sequence length) **', ...
+%                     'ResourceAwareRecedingHorizonController', config.controlSequenceLength);
+%                 controllerHorizonLength = config.controlSequenceLength;
+%             end
+%             alpha = 10;
+%             costsPerStage = ones(1, controllerHorizonLength);
+%             costsPerStage(1:floor(controllerHorizonLength) / 2) = 10;
+%             sendingCostFunction = @(eventSchedule, eventHistory) sum(eventSchedule .* costsPerStage);                        
+%             
+%             neighborFunction = @ResourceAwareRecedingHorizonController.standardGetNeighborFixedNumberOfOnes;
+%             initScheduleFunction = @(K) ResourceAwareRecedingHorizonController.getInitialScheduleFixedNumberOnes(5, K);
+%             startScheduleFunction = @ResourceAwareRecedingHorizonController.standardGetStartScheduleFixedNumberOfOnes;
+%                 
+%             controller = ResourceAwareRecedingHorizonController(config.A, config.B, config.C, config.Q, config.R, ...
+%                 alpha, config.caDelayProbs, config.controlSequenceLength, controllerHorizonLength, config.maxMeasDelay, ...
+%                 config.W, config.V, x0, x0Cov, ...
+%                 sendingCostFunction, neighborFunction, initScheduleFunction, startScheduleFunction);
         otherwise
             error('ncs_initialize:InitController:UnsupportedControllerClass', ...
                 '** Controller class with name ''%s'' unsupported or unknown **', config.controllerClassName);

@@ -100,17 +100,17 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             this.controller = NominalPredictiveController(this.A, this.B, this.Q, this.R, this.controlSeqLength);
             this.filter = DelayedKF(this.maxMeasDelay, eye(3));
             this.filter.setStateMeanAndCov(this.zeroPlantState, 0.5 * eye (this.dimX));            
-            
+                        
             ncsPlant = NcsPlant(LinearPlant(this.A, this.B, this.W), ...
                 BufferingActuator(this.controlSeqLength, zeros(this.dimU, 1)));
             ncsController = NcsControllerWithFilter(this.controller, this.filter, ...
                  LinearPlant(this.A, this.B, this.W), this.sensor, zeros(this.dimU, 1), [1/4 1/4 1/4 1/4 1/4]);
-            ncsSensor = NcsSensor(this.sensor);
+            ncsSensor = NcsSensor(this.sensor, this.maxPlantSteps * this.plantTickerInterval);
             
             this.ncs = NetworkedControlSystem(ncsController, ncsPlant, ncsSensor, ...
                 'NCS', this.tickerInterval, this.plantTickerInterval, NetworkType.TcpLike);
             
-            % init plant
+            % init plant            
             maxSimTime = ConvertToPicoseconds(this.maxPlantSteps * this.plantTickerInterval);
             this.ncs.initPlant(this.zeroPlantState, maxSimTime);
             this.ncs.initStatisticsRecording(maxSimTime);
@@ -174,12 +174,15 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             this.verifySize(controllerStats.numDiscardedControlSequences, [1 this.maxLoopSteps]);
             this.verifyGreaterThanOrEqual(controllerStats.numDiscardedControlSequences, 0);
             
+            this.verifyTrue(isfield(controllerStats, 'trueModes'));
+            this.verifySize(controllerStats.trueModes, [1 this.maxLoopSteps]);
+            
             this.verifyTrue(isfield(plantStats, 'appliedInputs'));
             this.verifySize(plantStats.appliedInputs, [this.dimU this.maxPlantSteps]);
             
             this.verifyTrue(isfield(plantStats, 'trueStates'));
             this.verifySize(plantStats.trueStates, [this.dimX this.maxPlantSteps + 1]);
-            
+                                   
             % now check the returned value of the cost function
             this.verifyThat(costs, IsScalar);
             this.verifyGreaterThanOrEqual(costs, 0);

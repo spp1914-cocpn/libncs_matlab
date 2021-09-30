@@ -58,12 +58,21 @@ classdef EventBasedNcsSensor < NcsSensor
     
     methods (Access = public)
         %% EventBasedNcsSensor
-        function this = EventBasedNcsSensor(sensorModel, measurementDelta)
+        function this = EventBasedNcsSensor(sensorModel, maxSensorSteps, measurementDelta)
             % Class constructor.
             %
             % Parameters:
             %   >> sensorModel (LinearMeasurementModel instance)
             %      The measurement model to be utilized by the sensor.
+            %
+            %   >> maxSensorSteps (Positive integer)
+            %      A positive integer denoting the maximum number of sensor invocations to be carried out during the simulation.
+            %
+            %      Note: The actual number of maxSensorSteps steps carried out during a
+            %      simulation can be smaller than specified by this parameter because an NCS can be finished
+            %      prematurely, e.g., due to errors at runtime, this sensor's event-based behavior, varying sampling rates of controller and sensor,
+            %      or a parameter in an Omnet ini-file indicating that an NCS should not be
+            %      active over the whole simulation time.
             %
             %   >> measurementDelta (Nonnegative scalar)
             %      The measurement delta to be utilized for the send-on-delta-strategy.
@@ -72,8 +81,8 @@ classdef EventBasedNcsSensor < NcsSensor
             %   << this (EventBasedNcsSensor)
             %      A new EventBasedNcsSensor instance.
             
-            this@NcsSensor(sensorModel);
-            if nargin == 2
+            this@NcsSensor(sensorModel, maxSensorSteps);
+            if nargin == 3
                 this.measurementDelta = measurementDelta;
             end
             this.isEventBased = true;
@@ -100,7 +109,7 @@ classdef EventBasedNcsSensor < NcsSensor
             %
             
             % take a measurement y_k
-            measurement = this.sensor.simulate(plantState);
+            measurement = this.sensor.measurementEquation(plantState) + this.sensorNoise(:, timestep);
 
             % perform send-on-delta strategy
             if this.checkSendMeasurement(measurement)

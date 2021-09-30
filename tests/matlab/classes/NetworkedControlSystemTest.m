@@ -100,7 +100,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             this.plant = LinearPlant(this.A, this.B, this.W);
             this.sensor = LinearMeasurementModel(this.C);
             this.sensor.setNoise(Gaussian(0, this.V));
-            this.sensorSubsystem = NcsSensor(this.sensor);
+            this.sensorSubsystem = NcsSensor(this.sensor, this.maxPlantSteps);
             
             this.zeroPlantState = zeros(this.dimX, 1); % plant state is already at the origin
             this.plantState = ones(this.dimX, 1); 
@@ -489,7 +489,29 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             
             this.verifyEqual(this.ncsUnderTest.getCurrentControlError(), 0);            
         end        
-        
+%%
+%%
+        %% testIsPlantStateAdmissible
+        function testIsPlantStateAdmissible(this)
+           this.assertNotEmpty(this.ncsUnderTest.plant);
+           
+           % no plant step taken, so it should be admissible
+           this.verifyTrue(this.ncsUnderTest.isPlantStateAdmissible());          
+           
+           this.ncsUnderTest.initPlant(zeros(this.dimX, 1), this.maxSimTime);
+           this.ncsUnderTest.plantStep(this.maxSimTime);
+           
+           this.verifyTrue(this.ncsUnderTest.isPlantStateAdmissible());    
+           
+           this.plant.setStateConstraints(ones(this.dimX, 1), inf(this.dimX, 1));
+           % this state now violates the constraints
+           this.ncsUnderTest.initPlant(zeros(this.dimX, 1), this.maxSimTime);
+           this.ncsUnderTest.plantStep(this.maxSimTime);
+           
+           this.verifyFalse(this.ncsUnderTest.isPlantStateAdmissible());   
+        end
+%%
+%%
         %% testStepNoPackets
         function testStepNoPackets(this)
             import matlab.unittest.constraints.IsScalar;
