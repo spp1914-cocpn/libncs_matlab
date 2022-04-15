@@ -127,9 +127,9 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             modePlantModels = arrayfun(@(~) LinearPlant(this.A, this.B, this.W), 1:this.controlSeqLength + 1, ...
                 'UniformOutput', false);                                   
             jumpLinearPlantModel = JumpLinearSystemModel(this.controlSeqLength + 1, modePlantModels);
-            modeFilters = arrayfun(@(mode) EKF(sprintf('KF for mode %d', mode)), 1:this.controlSeqLength + 1, ...
-                'UniformOutput', false);
-            ineptFilter = DelayedIMMF(modeFilters, eye(this.controlSeqLength + 1), this.maxMeasDelay);
+            
+            % use the dummy filter here
+            ineptFilter = DelayedMeasurementsFilterStub(this.maxMeasDelay, 'Dummy Filter');
             ineptFilter.setState(controllerState);
             
             ncsController = NcsControllerWithFilter(this.controller, ineptFilter, ...
@@ -140,7 +140,7 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             timestep = 1; % initial timestep
             previousMode = [];
             
-           this.verifyError(@() ncsController.step(timestep, scPackets, acPackets, previousMode), expectedErrId);
+            this.verifyError(@() ncsController.step(timestep, scPackets, acPackets, previousMode), expectedErrId);
         end
         
         %% testStepNoPacketsZeroState

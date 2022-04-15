@@ -399,16 +399,20 @@ function controller = initController(config, horizonLength)
                 inputConstraintWeightings = [];
                 inputConstraints = [];
             end
-            
+	    numCaModes = config.controlSequenceLength + 1; % number of modes of the augmented plant MJLS    
+            modeTransitionProbs = Utility.truncateDiscreteProbabilityDistribution(config.caDelayProbs, numCaModes);    
+            transitionMatrixCa = Utility.calculateDelayTransitionMatrix(modeTransitionProbs);             
+	    % make sure that quadprog is on path, called via yalmip
+            %# function quadprog
             if all(isfield(config, {'Z', 'refTrajectory'}))
                 % we track a trajectory
                 controller = LinearlyConstrainedPredictiveController(config.A, config.B, config.Q, config.R, ...
-                    config.controlSequenceLength, config.caDelayProbs, stateConstraintWeightings, stateConstraints, ...
+                    config.controlSequenceLength, transitionMatrixCa, stateConstraintWeightings, stateConstraints, ...
                     inputConstraintWeightings, inputConstraints, config.Z, config.refTrajectory);
             else
                 % we attempt to drive the state to the origin
                 controller = LinearlyConstrainedPredictiveController(config.A, config.B, config.Q, config.R, ...
-                    config.controlSequenceLength, config.caDelayProbs, stateConstraintWeightings, stateConstraints, ...
+                    config.controlSequenceLength, transitionMatrixCa, stateConstraintWeightings, stateConstraints, ...
                     inputConstraintWeightings, inputConstraints);
             end
             if isfield(config, 'mpcHorizon')
@@ -417,8 +421,7 @@ function controller = initController(config, horizonLength)
                 warning('ncs_initialize:InitController:LinearlyConstrainedPredictiveController:NoHorizonLength', ...
                     'Horizon length K for %s not specified, using K=%d (sequence length) ***', ...
                     'LinearlyConstrainedPredictiveController', config.controlSequenceLength);                
-            end
-            
+            end            
         case 'FiniteHorizonTrackingController'
             % check if the required additional fields are present in the
             % config: Z (matrix) and refTrajectory (matrix)
@@ -445,8 +448,12 @@ function controller = initController(config, horizonLength)
             controller = NominalPredictiveController(config.A, config.B, config.Q, config.R, ...
                 config.controlSequenceLength);
         case 'ExpectedInputPredictiveController'
+            % directly use the mode transition matrix           
+            transitionMatrixCa = Utility.calculateDelayTransitionMatrix(...
+                Utility.truncateDiscreteProbabilityDistribution(config.caDelayProbs, config.controlSequenceLength + 1));
+            
             controller = ExpectedInputPredictiveController(config.A, config.B, config.Q, config.R, ...
-                config.controlSequenceLength, config.caDelayProbs);
+                config.controlSequenceLength, transitionMatrixCa);
         case 'PolePlacementPredictiveController'
             assert(isfield(config, 'polesCont'), ...
                 'ncs_initialize:InitController:PolePlacementPredictiveController', ...
@@ -454,6 +461,31 @@ function controller = initController(config, horizonLength)
                     'PolePlacementPredictiveController');
             controller = PolePlacementPredictiveController(config.A, config.B, config.polesCont, ...
                 config.controlSequenceLength, config.samplingInterval);
+        case 'ScenarioBasedPredictiveController'
+            % directly use the mode transition matrix           
+            transitionMatrixCa = Utility.calculateDelayTransitionMatrix(...
+                Utility.truncateDiscreteProbabilityDistribution(config.caDelayProbs, config.controlSequenceLength + 1));
+            
+            % make sure that quadprog is on path, called via yalmip
+            %# function quadprog
+            lazyInitScenarioTree = true;
+            if all(isfield(config, {'Z', 'refTrajectory'}))
+                % we track a trajectory
+                controller = ScenarioBasedPredictiveController(config.A, config.B, config.Q, config.R, ...
+                    config.controlSequenceLength, transitionMatrixCa, lazyInitScenarioTree, ...
+                    config.Z, config.refTrajectory);
+            else
+                % we attempt to drive the state to the origin
+                controller = ScenarioBasedPredictiveController(config.A, config.B, config.Q, config.R, ...
+                    config.controlSequenceLength, transitionMatrixCa, lazyInitScenarioTree);
+            end
+            if isfield(config, 'mpcHorizon')
+                controller.changeHorizonLength(config.mpcHorizon);
+            else
+                warning('ncs_initialize:InitController:ScenarioBasedPredictiveController:NoHorizonLength', ...
+                    'Horizon length K for %s not specified, using K=%d (sequence length) ***', ...
+                    'ScenarioBasedPredictiveController', config.controlSequenceLength);
+            end
         case 'InfiniteHorizonUdpLikeController'
             assert(isfield(config, 'scDelayProbs'), ...
                 'ncs_initialize:InitController:InfiniteHorizonUdpLikeController', ...
@@ -476,10 +508,15 @@ function controller = initController(config, horizonLength)
             else
                 actualW = config.W;
             end            
-
+            numCaModes = config.controlSequenceLength + 1; % number of modes of the augmented plant MJLS    
+            modeTransitionProbs = Utility.truncateDiscreteProbabilityDistribution(config.caDelayProbs, numCaModes);    
+            transitionMatrixCa = Utility.calculateDelayTransitionMatrix(modeTransitionProbs); 
+            
+            useMexImplementation = true; % use C++ implementation to compute (K,L)
+            v_mean = getConfigValueOrDefault(config, 'v_mean', zeros(size(config.V, 1), 1));
             controller = InfiniteHorizonUdpLikeController(config.A, config.B, config.C, config.Q, config.R, ...
-                config.caDelayProbs, config.scDelayProbs, config.controlSequenceLength, config.maxMeasDelay, ...
-                actualW, config.V, getConfigValueOrDefault(config, 'v_mean', zeros(size(config.V, 1), 1)));
+                transitionMatrixCa, config.scDelayProbs, config.controlSequenceLength, config.maxMeasDelay, ...
+                actualW, config.V, v_mean, useMexImplementation);
 
             controller.setControllerPlantState(config.initialEstimate);
         case 'IMMBasedRecedingHorizonController'
@@ -551,9 +588,12 @@ function controller = initController(config, horizonLength)
             modeTransitionProbs = Utility.truncateDiscreteProbabilityDistribution(config.caDelayProbs, numCaModes);    
             transitionMatrixCa = Utility.calculateDelayTransitionMatrix(modeTransitionProbs); 
             
+            useInfHorizonInitGains = true;
+            useMexImplementation = true;
             controller = RecedingHorizonUdpLikeController(config.A, config.B, config.C, config.Q, config.R, ...
                 transitionMatrixCa, scDelayProbs, config.controlSequenceLength, ...
-                config.maxMeasDelay, actualW, config.V, controllerHorizonLength, x0, x0Cov);
+                config.maxMeasDelay, actualW, config.V, controllerHorizonLength, x0, x0Cov, useInfHorizonInitGains, useMexImplementation);   
+            
         case 'MSSController'
             controllerDelta = 0.05; % to be promoted to configuration parameter
             assumeCorrDelays = false;
@@ -633,7 +673,7 @@ function [filter, filterPlantModel, filterSensorModel] = initFilter(config)
                 '** Filter class with name ''%s'' unsupported or unknown **', config.filterClassName);
     end
     % use linear measurement model
-    filterSensorModel = LinearMeasurementModel(config.C);
+    filterSensorModel = LinearMeasurementModel(config.C);    
     fields = isfield(config, {'v_mean', 'V'});
     if fields(1)
         noiseMean = config.v_mean;

@@ -84,8 +84,10 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             
             this.transmissionCosts = 10;
             
+            v_mean = []; % implies zero
+            useMex = false;
             this.controller = InfiniteHorizonUdpLikeController(this.A, this.B, this.C, this.Q, this.R, ...
-                this.delayProbs, this.delayProbs, this.controlSeqLength, this.maxMeasDelay, this.W, this.V);            
+                this.modeTransitionMatrix, this.delayProbs, this.controlSeqLength, this.maxMeasDelay, this.W, this.V, v_mean, useMex);            
             % this controller requires (A,B) controllable
             this.eventBasedController = EventTriggeredInfiniteHorizonController(this.A, this.B, this.Q, this.R, ...
                 this.delayProbs, this.controlSeqLength, this.transmissionCosts);

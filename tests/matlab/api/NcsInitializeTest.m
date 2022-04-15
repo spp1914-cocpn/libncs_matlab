@@ -190,16 +190,18 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
         %% testInvalidConfig
         function testInvalidConfig(this)
             expectedErrId = 'ncs_initialize:CheckConfigFile';
-            pattern = '** The following 3 variables'; % three variables supposed to be missing
- 
+            pattern = '** The following 3 variables'; % three variables supposed to be missing            
+            occurredEx = [];
             % manually investigate and check the exception
             try
                 ncs_initialize(this.maxSimTime, this.id, [], this.matFilename);
             catch ex
-                this.verifyEqual(ex.identifier, expectedErrId);
-                errorMsg = ex.getReport('basic');                
-                this.verifyNotEmpty(strfind(errorMsg, pattern));
-            end            
+                occurredEx = ex;               
+            end
+            % the exception should have occurred
+            this.verifyNotEmpty(occurredEx);
+            this.verifyEqual(occurredEx.identifier, expectedErrId);                           
+            this.verifyNotEmpty(strfind(occurredEx.getReport('basic'), pattern));
         end
         
         %% testUnsupportedControllerClass
@@ -284,6 +286,30 @@ classdef (SharedTestFixtures={matlab.unittest.fixtures.PathFixture(...
             this.configStruct.controllerClassName = 'EventTriggeredInfiniteHorizonController';
             this.verifyError(@() ncs_initialize(this.maxSimTime, this.id, this.configStruct, this.matFilename), ...
                 expectedErrId);              
+        end
+        
+         %% testInvalidPolePlacementPredictiveController
+        function testInvalidPolePlacementPredictiveController(this)
+            expectedErrId = 'ncs_initialize:InitController:PolePlacementPredictiveController';
+            
+             % we do not pass the desired pole lcations
+            this.configStruct.controllerClassName = 'PolePlacementPredictiveController';
+            this.configStruct.filterClassName = 'DelayedKF';
+            this.configStruct.initialEstimate = Gaussian(zeros(this.dimX, 1), eye(this.dimX));
+            this.verifyError(@() ncs_initialize(this.maxSimTime, this.id, this.configStruct, this.matFilename), ...
+                expectedErrId);              
+        end
+        
+        %% testWarningScenarioBasedPredictiveController
+        function testWarningScenarioBasedPredictiveController(this)
+            expectedWarnId = 'ncs_initialize:InitController:ScenarioBasedPredictiveController:NoHorizonLength';
+            
+            % we do not pass the length of the mpc horion
+            this.configStruct.controllerClassName = 'ScenarioBasedPredictiveController';
+            this.configStruct.filterClassName = 'DelayedKF';
+            this.configStruct.initialEstimate = Gaussian(zeros(this.dimX, 1), eye(this.dimX));
+            this.verifyWarning(@() ncs_initialize(this.maxSimTime, this.id, this.configStruct, this.matFilename), ...
+                expectedWarnId);   
         end
         
         %% testInvalidInfiniteHorizonUdpLikeController
